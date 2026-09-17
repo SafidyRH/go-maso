@@ -54,3 +54,43 @@ func (s *Service) CheckApplication(
 
 	return result, nil
 }
+
+func (s *Service) GetHistory(
+	ctx context.Context,
+	applicationID string,
+	limit int,
+) ([]HealthCheck, error) {
+	_, err := s.applicationRepository.GetByID(
+		ctx,
+		applicationID,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return s.monitoringRepository.ListByApplication(
+		ctx,
+		applicationID,
+		limit,
+	)
+}
+
+func (s *Service) GetSummary(
+	ctx context.Context,
+	applicationID string,
+) (Summary, error) {
+	_, err := s.applicationRepository.GetByID(
+		ctx,
+		applicationID,
+	)
+
+	if err != nil {
+		return Summary{}, err
+	}
+
+	return s.monitoringRepository.GetSummary(
+		ctx,
+		applicationID,
+	)
+}
