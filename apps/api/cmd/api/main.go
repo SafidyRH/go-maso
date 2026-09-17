@@ -12,6 +12,7 @@ import (
 
 	"github.com/safidy/go-maso/apps/api/internal/application"
 	"github.com/safidy/go-maso/apps/api/internal/config"
+	"github.com/safidy/go-maso/apps/api/internal/dashboard"
 	"github.com/safidy/go-maso/apps/api/internal/database"
 	"github.com/safidy/go-maso/apps/api/internal/monitoring"
 )
@@ -54,8 +55,14 @@ func main() {
 
 	monitoringRepository := monitoring.NewRepository(db)
 
+	dashboardRepository := dashboard.NewRepository(db)
+
 	checker := monitoring.NewChecker(
 		5 * time.Second,
+	)
+
+	dashboardHandler := dashboard.NewHandler(
+		dashboardRepository,
 	)
 
 	monitoringService := monitoring.NewService(
@@ -83,6 +90,7 @@ func main() {
 	)
 
 	monitoringHandler.RegisterRoutes(mux)
+	dashboardHandler.RegisterRoutes(mux)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
