@@ -51,9 +51,6 @@ func main() {
 	mux := http.NewServeMux()
 
 	applicationRepository := application.NewRepository(db)
-	applicationHandler := application.NewHandler(applicationRepository)
-
-	applicationHandler.RegisterRoutes(mux)
 
 	monitoringRepository := monitoring.NewRepository(db)
 
@@ -67,6 +64,20 @@ func main() {
 		checker,
 	)
 
+	scheduler := monitoring.NewScheduler(
+		applicationRepository,
+		monitoringService,
+	)
+
+	// Application HTTP
+	applicationHandler := application.NewHandler(
+		applicationRepository,
+		scheduler,
+	)
+
+	applicationHandler.RegisterRoutes(mux)
+
+	// Monitoring HTTP
 	monitoringHandler := monitoring.NewHandler(
 		monitoringService,
 	)
@@ -107,11 +118,6 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-
-	scheduler := monitoring.NewScheduler(
-		applicationRepository,
-		monitoringService,
-	)
 
 	slog.Info("Go-Maso API started", "port", 8080)
 

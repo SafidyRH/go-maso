@@ -19,3 +19,11 @@ type CreateApplicationInput struct {
 	HealthCheckURL       string `json:"health_check_url"`
 	CheckIntervalSeconds int    `json:"check_interval_seconds"`
 }
+
+type UpdateApplicationInput struct {
+	Name                 *string `json:"name"`
+	URL                  *string `json:"url"`
+	HealthCheckURL       *string `json:"health_check_url"`
+	CheckIntervalSeconds *int    `json:"check_interval_seconds"`
+	Enabled              *bool   `json:"enabled"`
+}
