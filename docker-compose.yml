@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: go-maso-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: gomaso
+      POSTGRES_PASSWORD: gomaso
+      POSTGRES_DB: go_maso
+
+    ports:
+      - "5434:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gomaso -d go_maso"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

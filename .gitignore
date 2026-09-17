@@ -1,0 +1,32 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Go build and test artifacts
+bin/
+*.exe
+*.test
+*.out
+coverage/
+coverage.*
+
+# Node.js dependencies and build artifacts
+node_modules/
+dist/
+build/
+.next/
+.nuxt/
+.vite/
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+.cache/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
