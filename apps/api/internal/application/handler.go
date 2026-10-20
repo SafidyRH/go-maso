@@ -1,328 +1,190 @@
 package application
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/safidy/go-maso/apps/api/internal/httpapi"
 )
+
+type Scheduler interface {
+	RefreshApplication(ctx context.Context, applicationID string) error
+}
 
 type Handler struct {
 	repository *Repository
-	scheduler  MonitorScheduler
+	scheduler  Scheduler
 }
 
-func NewHandler(repository *Repository, scheduler MonitorScheduler) *Handler {
-	return &Handler{
-		repository: repository,
-		scheduler:  scheduler,
-	}
+func NewHandler(repository *Repository, scheduler Scheduler) *Handler {
+	return &Handler{repository: repository, scheduler: scheduler}
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /applications", h.create)
 	mux.HandleFunc("GET /applications", h.list)
-
-	mux.HandleFunc(
-		"PATCH /applications/{id}",
-		h.update,
-	)
-
-	mux.HandleFunc(
-		"DELETE /applications/{id}",
-		h.delete,
-	)
+	mux.HandleFunc("GET /applications/{id}", h.get)
+	mux.HandleFunc("PATCH /applications/{id}", h.update)
+	mux.HandleFunc("DELETE /applications/{id}", h.archive)
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	var input CreateApplicationInput
-
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&input); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+	if err := httpapi.DecodeJSON(w, r, &input); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if input.Name == "" {
-		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	if input.URL == "" {
-		http.Error(w, `{"error":"url is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	if input.HealthCheckURL == "" {
-		http.Error(w, `{"error":"health_check_url is required"}`, http.StatusBadRequest)
-		return
-	}
-
-	if input.CheckIntervalSeconds == 0 {
-		input.CheckIntervalSeconds = 30
-	}
-
-	if input.CheckIntervalSeconds < 5 {
-		http.Error(
-			w,
-			`{"error":"check_interval_seconds must be at least 5"}`,
-			http.StatusBadRequest,
-		)
+	input.Name = strings.TrimSpace(input.Name)
+	input.Owner = strings.TrimSpace(input.Owner)
+	if err := validate(input.Name, input.Owner); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	app, err := h.repository.Create(r.Context(), input)
-
 	if err != nil {
-		slog.Error("failed to create application", "error", err)
-
-		http.Error(
-			w,
-			`{"error":"failed to create application"}`,
-			http.StatusInternalServerError,
-		)
-
+		h.internalError(w, "create application", err)
 		return
 	}
 
-	if err := h.scheduler.Sync(
-		r.Context(),
-		app,
-	); err != nil {
-		slog.Error(
-			"failed to sync application with scheduler",
-			"application_id", app.ID,
-			"error", err,
-		)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-
-	if err := json.NewEncoder(w).Encode(app); err != nil {
-		slog.Error("failed to encode application", "error", err)
-	}
+	httpapi.WriteJSON(w, http.StatusCreated, app)
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	applications, err := h.repository.List(r.Context())
+	limit, offset, err := pagination(r)
 	if err != nil {
-		slog.Error("failed to list applications", "error", err)
-
-		http.Error(
-			w,
-			`{"error":"failed to list applications"}`,
-			http.StatusInternalServerError,
-		)
-
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-
-	if err := json.NewEncoder(w).Encode(applications); err != nil {
-		slog.Error("failed to encode applications", "error", err)
+	applications, err := h.repository.List(r.Context(), limit, offset)
+	if err != nil {
+		h.internalError(w, "list applications", err)
+		return
 	}
+
+	httpapi.WriteJSON(w, http.StatusOK, Page{Items: applications, Limit: limit, Offset: offset})
 }
 
-func (h *Handler) update(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	applicationID := r.PathValue("id")
-
-	app, err := h.repository.GetByID(
-		r.Context(),
-		applicationID,
-	)
-
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !httpapi.RequireUUID(w, id) {
+		return
+	}
+	app, err := h.repository.GetByID(r.Context(), id)
 	if errors.Is(err, ErrNotFound) {
-		http.Error(
-			w,
-			`{"error":"application not found"}`,
-			http.StatusNotFound,
-		)
+		httpapi.WriteError(w, http.StatusNotFound, "application not found")
+		return
+	}
+	if err != nil {
+		h.internalError(w, "get application", err)
 		return
 	}
 
+	httpapi.WriteJSON(w, http.StatusOK, app)
+}
+
+func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !httpapi.RequireUUID(w, id) {
+		return
+	}
+	app, err := h.repository.GetByID(r.Context(), id)
+	if errors.Is(err, ErrNotFound) {
+		httpapi.WriteError(w, http.StatusNotFound, "application not found")
+		return
+	}
 	if err != nil {
-		slog.Error(
-			"failed to get application",
-			"error", err,
-		)
-
-		http.Error(
-			w,
-			`{"error":"failed to get application"}`,
-			http.StatusInternalServerError,
-		)
-
+		h.internalError(w, "get application", err)
 		return
 	}
 
 	var input UpdateApplicationInput
-
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&input); err != nil {
-		http.Error(
-			w,
-			`{"error":"invalid request body"}`,
-			http.StatusBadRequest,
-		)
+	if err := httpapi.DecodeJSON(w, r, &input); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if input.Name != nil {
-		if *input.Name == "" {
-			http.Error(
-				w,
-				`{"error":"name cannot be empty"}`,
-				http.StatusBadRequest,
-			)
-			return
-		}
-
-		app.Name = *input.Name
+		app.Name = strings.TrimSpace(*input.Name)
 	}
-
-	if input.URL != nil {
-		if *input.URL == "" {
-			http.Error(
-				w,
-				`{"error":"url cannot be empty"}`,
-				http.StatusBadRequest,
-			)
-			return
-		}
-
-		app.URL = *input.URL
+	if input.Owner != nil {
+		app.Owner = strings.TrimSpace(*input.Owner)
 	}
-
-	if input.HealthCheckURL != nil {
-		if *input.HealthCheckURL == "" {
-			http.Error(
-				w,
-				`{"error":"health_check_url cannot be empty"}`,
-				http.StatusBadRequest,
-			)
-			return
-		}
-
-		app.HealthCheckURL = *input.HealthCheckURL
-	}
-
-	if input.CheckIntervalSeconds != nil {
-		if *input.CheckIntervalSeconds < 5 {
-			http.Error(
-				w,
-				`{"error":"check_interval_seconds must be at least 5"}`,
-				http.StatusBadRequest,
-			)
-			return
-		}
-
-		app.CheckIntervalSeconds =
-			*input.CheckIntervalSeconds
-	}
-
-	if input.Enabled != nil {
-		app.Enabled = *input.Enabled
-	}
-
-	updated, err := h.repository.Update(
-		r.Context(),
-		app,
-	)
-
-	if err != nil {
-		slog.Error(
-			"failed to update application",
-			"error", err,
-		)
-
-		http.Error(
-			w,
-			`{"error":"failed to update application"}`,
-			http.StatusInternalServerError,
-		)
-
+	if err := validate(app.Name, app.Owner); err != nil {
+		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if err := h.scheduler.Sync(
-		r.Context(),
-		updated,
-	); err != nil {
-		slog.Error(
-			"failed to sync updated application",
-			"application_id", updated.ID,
-			"error", err,
-		)
+	updated, err := h.repository.Update(r.Context(), app)
+	if err != nil {
+		h.internalError(w, "update application", err)
+		return
 	}
 
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(updated); err != nil {
-		slog.Error(
-			"failed to encode application",
-			"error", err,
-		)
-	}
+	httpapi.WriteJSON(w, http.StatusOK, updated)
 }
 
-func (h *Handler) delete(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	applicationID := r.PathValue("id")
-
-	err := h.repository.Delete(
-		r.Context(),
-		applicationID,
-	)
-
-	if errors.Is(err, ErrNotFound) {
-		http.Error(
-			w,
-			`{"error":"application not found"}`,
-			http.StatusNotFound,
-		)
-
+func (h *Handler) archive(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !httpapi.RequireUUID(w, id) {
+		return
+	}
+	if err := h.repository.Archive(r.Context(), id); errors.Is(err, ErrNotFound) {
+		httpapi.WriteError(w, http.StatusNotFound, "application not found")
+		return
+	} else if err != nil {
+		h.internalError(w, "archive application", err)
 		return
 	}
 
-	if err != nil {
-		slog.Error(
-			"failed to delete application",
-			"error", err,
-		)
-
-		http.Error(
-			w,
-			`{"error":"failed to delete application"}`,
-			http.StatusInternalServerError,
-		)
-
-		return
-	}
-
-	if err := h.scheduler.Remove(
-		r.Context(),
-		applicationID,
-	); err != nil {
-		slog.Error(
-			"failed to remove application from scheduler",
-			"application_id", applicationID,
-			"error", err,
-		)
+	if err := h.scheduler.RefreshApplication(r.Context(), id); err != nil {
+		slog.Error("failed to refresh archived application monitors", "application_id", id, "error", err)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func validate(name, owner string) error {
+	if name == "" {
+		return errors.New("name is required")
+	}
+	if len(name) > 120 {
+		return errors.New("name must contain at most 120 characters")
+	}
+	if len(owner) > 120 {
+		return errors.New("owner must contain at most 120 characters")
+	}
+	return nil
+}
+
+func pagination(r *http.Request) (int, int, error) {
+	limit := 50
+	offset := 0
+	var err error
+
+	if value := r.URL.Query().Get("limit"); value != "" {
+		limit, err = strconv.Atoi(value)
+		if err != nil || limit < 1 || limit > 200 {
+			return 0, 0, errors.New("limit must be between 1 and 200")
+		}
+	}
+	if value := r.URL.Query().Get("offset"); value != "" {
+		offset, err = strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return 0, 0, errors.New("offset must be zero or greater")
+		}
+	}
+
+	return limit, offset, nil
+}
+
+func (h *Handler) internalError(w http.ResponseWriter, operation string, err error) {
+	slog.Error("application request failed", "operation", operation, "error", err)
+	httpapi.WriteError(w, http.StatusInternalServerError, "internal server error")
 }
