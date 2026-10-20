@@ -26,11 +26,20 @@ type ApplicationOverview struct {
 
 type ApplicationDetail struct {
 	ApplicationOverview
-	PeriodHours  int                 `json:"period_hours"`
-	GeneratedAt  time.Time           `json:"generated_at"`
-	Environments []EnvironmentDetail `json:"environments"`
-	Timeline     []MetricPoint       `json:"timeline"`
-	RecentEvents []RecentEvent       `json:"recent_events"`
+	PeriodHours   int                 `json:"period_hours"`
+	PeriodSummary PeriodSummary       `json:"period_summary"`
+	GeneratedAt   time.Time           `json:"generated_at"`
+	Environments  []EnvironmentDetail `json:"environments"`
+	Timeline      []MetricPoint       `json:"timeline"`
+	RecentEvents  []RecentEvent       `json:"recent_events"`
+}
+
+type PeriodSummary struct {
+	Uptime                float64 `json:"uptime"`
+	AverageResponseTimeMS float64 `json:"average_response_time_ms"`
+	TotalChecks           int64   `json:"total_checks"`
+	UpChecks              int64   `json:"up_checks"`
+	DownChecks            int64   `json:"down_checks"`
 }
 
 type EnvironmentDetail struct {

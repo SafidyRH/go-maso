@@ -375,8 +375,8 @@ function detailTemplate() {
 
       <div class="summary-grid">
         <article class="metric-card ${detail.status === "DOWN" ? "danger" : ""}"><span class="metric-label"><i></i> État courant</span><strong class="metric-value" style="font-size:24px">${STATUS_LABELS[detail.status] || "Inconnu"}</strong><span class="metric-detail">Dernier contrôle ${relativeTime(detail.last_checked_at)}</span></article>
-        <article class="metric-card"><span class="metric-label"><i></i> Disponibilité</span><strong class="metric-value">${formatPercent(detail.uptime_24h)}</strong><span class="metric-detail">Sur ${PERIOD_LABELS[state.periodHours]}</span></article>
-        <article class="metric-card"><span class="metric-label"><i></i> Latence moyenne</span><strong class="metric-value">${formatLatency(detail.average_response_time_ms)}</strong><span class="metric-detail">${number(detail.total_checks_24h)} contrôles analysés</span></article>
+        <article class="metric-card"><span class="metric-label"><i></i> Disponibilité</span><strong class="metric-value">${formatPercent(detail.period_summary.uptime)}</strong><span class="metric-detail">Sur ${PERIOD_LABELS[state.periodHours]}</span></article>
+        <article class="metric-card"><span class="metric-label"><i></i> Latence moyenne</span><strong class="metric-value">${formatLatency(detail.period_summary.average_response_time_ms)}</strong><span class="metric-detail">${number(detail.period_summary.total_checks)} contrôles analysés</span></article>
         <article class="metric-card"><span class="metric-label"><i></i> Dernière mesure</span><strong class="metric-value">${formatLatency(detail.last_response_time_ms)}</strong><span class="metric-detail">HTTP ${detail.last_status_code || "—"}</span></article>
       </div>
 
@@ -386,7 +386,7 @@ function detailTemplate() {
           <div class="chart">${latencyChart(detail.timeline || [])}</div>
         </article>
         <article class="panel chart-card">
-          <header class="panel-heading"><div><h2>Disponibilité</h2><p>Part des contrôles réussis par intervalle</p></div><strong class="chart-value">${formatPercent(detail.uptime_24h)}</strong></header>
+          <header class="panel-heading"><div><h2>Disponibilité</h2><p>Part des contrôles réussis par intervalle</p></div><strong class="chart-value">${formatPercent(detail.period_summary.uptime)}</strong></header>
           <div class="chart">${availabilityChart(detail.timeline || [])}</div>
         </article>
       </div>

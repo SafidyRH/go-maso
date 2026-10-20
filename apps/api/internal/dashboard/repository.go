@@ -132,9 +132,16 @@ func (r *Repository) List(ctx context.Context) ([]ApplicationOverview, error) {
 }
 
 func (r *Repository) GetDetail(ctx context.Context, applicationID string, periodHours int) (ApplicationDetail, error) {
-	overview, err := r.getOverview(ctx, applicationID, periodHours)
+	overview, err := r.getOverview(ctx, applicationID, 24)
 	if err != nil {
 		return ApplicationDetail{}, err
+	}
+	periodOverview := overview
+	if periodHours != 24 {
+		periodOverview, err = r.getOverview(ctx, applicationID, periodHours)
+		if err != nil {
+			return ApplicationDetail{}, err
+		}
 	}
 
 	environments, err := r.listEnvironments(ctx, applicationID)
@@ -171,10 +178,17 @@ func (r *Repository) GetDetail(ctx context.Context, applicationID string, period
 	return ApplicationDetail{
 		ApplicationOverview: overview,
 		PeriodHours:         periodHours,
-		GeneratedAt:         time.Now().UTC(),
-		Environments:        environments,
-		Timeline:            timeline,
-		RecentEvents:        events,
+		PeriodSummary: PeriodSummary{
+			Uptime:                periodOverview.Uptime24H,
+			AverageResponseTimeMS: periodOverview.AverageResponseTimeMS,
+			TotalChecks:           periodOverview.TotalChecks24H,
+			UpChecks:              periodOverview.UpChecks24H,
+			DownChecks:            periodOverview.DownChecks24H,
+		},
+		GeneratedAt:  time.Now().UTC(),
+		Environments: environments,
+		Timeline:     timeline,
+		RecentEvents: events,
 	}, nil
 }
 
