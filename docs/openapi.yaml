@@ -1,0 +1,515 @@
+openapi: 3.1.0
+info:
+  title: Go-Maso API
+  version: 0.1.0
+  description: API contract for the Go-Maso MVP monitoring catalog and HTTP checks.
+servers:
+  - url: http://localhost:8080
+
+paths:
+  /healthz:
+    get:
+      summary: Check API liveness
+      responses:
+        "200":
+          description: The API process is alive.
+  /readyz:
+    get:
+      summary: Check API and database readiness
+      responses:
+        "200":
+          description: The API and PostgreSQL are ready.
+        "503":
+          description: PostgreSQL is unavailable.
+
+  /applications:
+    get:
+      summary: List active applications
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of applications.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationPage"
+    post:
+      summary: Create an application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplicationInput"
+      responses:
+        "201":
+          description: Application created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /applications/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: Get an application
+      responses:
+        "200":
+          description: Application found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      summary: Update an application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplicationPatch"
+      responses:
+        "200":
+          description: Application updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Application"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Archive an application
+      responses:
+        "204":
+          description: Application archived.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /applications/{applicationID}/environments:
+    parameters:
+      - name: applicationID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: List an application's environments
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of environments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnvironmentPage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      summary: Create an environment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvironmentInput"
+      responses:
+        "201":
+          description: Environment created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /environments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: Get an environment
+      responses:
+        "200":
+          description: Environment found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      summary: Update or enable an environment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnvironmentPatch"
+      responses:
+        "200":
+          description: Environment updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Environment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Archive an environment
+      responses:
+        "204":
+          description: Environment archived.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /environments/{environmentID}/monitors:
+    parameters:
+      - name: environmentID
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      summary: List an environment's monitors
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of monitors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitorPage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      summary: Create an HTTP monitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitorInput"
+      responses:
+        "201":
+          description: Monitor created and scheduled when enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Monitor"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /monitors/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: Get a monitor
+      responses:
+        "200":
+          description: Monitor found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Monitor"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      summary: Update or enable a monitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonitorPatch"
+      responses:
+        "200":
+          description: Monitor updated and rescheduled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Monitor"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Archive a monitor
+      responses:
+        "204":
+          description: Monitor archived and unscheduled.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /monitors/{id}/check:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      summary: Run and persist a monitor check immediately
+      responses:
+        "200":
+          description: Check completed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /monitors/{id}/checks:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - $ref: "#/components/parameters/Limit"
+    get:
+      summary: List recent check results
+      responses:
+        "200":
+          description: Recent results, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CheckResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /monitors/{id}/monitoring-summary:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: Get the current state and 24-hour summary
+      responses:
+        "200":
+          description: Monitor summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoringSummary"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /dashboard:
+    get:
+      summary: List application-level monitoring aggregates
+      responses:
+        "200":
+          description: Application dashboard rows.
+
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+
+  responses:
+    BadRequest:
+      description: The request is invalid.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: The resource does not exist or is archived.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Application:
+      type: object
+      required: [id, name, owner, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 120 }
+        owner: { type: string, maxLength: 120 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ApplicationInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        owner: { type: string, maxLength: 120 }
+    ApplicationPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        owner: { type: string, maxLength: 120 }
+    ApplicationPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Application" }
+
+    Environment:
+      type: object
+      required: [id, application_id, name, base_url, enabled, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        application_id: { type: string, format: uuid }
+        name: { type: string, maxLength: 120 }
+        base_url: { type: string, format: uri }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EnvironmentInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        base_url: { type: string, format: uri }
+        enabled: { type: boolean, default: true }
+    EnvironmentPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        base_url: { type: string, format: uri }
+        enabled: { type: boolean }
+    EnvironmentPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Environment" }
+
+    Monitor:
+      allOf:
+        - $ref: "#/components/schemas/MonitorInput"
+        - type: object
+          required: [id, environment_id, effective_enabled, current_status, consecutive_failures, created_at, updated_at]
+          properties:
+            id: { type: string, format: uuid }
+            environment_id: { type: string, format: uuid }
+            effective_enabled: { type: boolean }
+            current_status: { $ref: "#/components/schemas/MonitorStatus" }
+            consecutive_failures: { type: integer, minimum: 0 }
+            last_checked_at: { type: string, format: date-time }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    MonitorInput:
+      type: object
+      required: [name, url]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        url: { type: string, format: uri }
+        method: { type: string, enum: [GET, HEAD], default: GET }
+        check_interval_seconds: { type: integer, minimum: 5, default: 30 }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000, default: 5000 }
+        expected_status_min: { type: integer, minimum: 100, maximum: 599, default: 200 }
+        expected_status_max: { type: integer, minimum: 100, maximum: 599, default: 299 }
+        failure_threshold: { type: integer, minimum: 1, maximum: 20, default: 3 }
+        enabled: { type: boolean, default: true }
+    MonitorPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        url: { type: string, format: uri }
+        method: { type: string, enum: [GET, HEAD] }
+        check_interval_seconds: { type: integer, minimum: 5 }
+        timeout_ms: { type: integer, minimum: 100, maximum: 60000 }
+        expected_status_min: { type: integer, minimum: 100, maximum: 599 }
+        expected_status_max: { type: integer, minimum: 100, maximum: 599 }
+        failure_threshold: { type: integer, minimum: 1, maximum: 20 }
+        enabled: { type: boolean }
+    MonitorPage:
+      allOf:
+        - $ref: "#/components/schemas/Page"
+        - type: object
+          properties:
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/Monitor" }
+    MonitorStatus:
+      type: string
+      enum: [UP, DOWN, DEGRADED, UNKNOWN]
+
+    CheckResult:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        monitor_id: { type: string, format: uuid }
+        outcome: { type: string, enum: [UP, DOWN] }
+        computed_status: { $ref: "#/components/schemas/MonitorStatus" }
+        consecutive_failures: { type: integer, minimum: 0 }
+        status_code: { type: integer }
+        response_time_ms: { type: integer, format: int64 }
+        error_message: { type: string }
+        checked_at: { type: string, format: date-time }
+    MonitoringSummary:
+      type: object
+      properties:
+        monitor_id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/MonitorStatus" }
+        consecutive_failures: { type: integer, minimum: 0 }
+        last_status_code: { type: integer }
+        last_response_time_ms: { type: integer, format: int64 }
+        last_checked_at: { type: string, format: date-time }
+        uptime_24h: { type: number }
+        average_response_time_ms: { type: number }
+        total_checks_24h: { type: integer, format: int64 }
+        up_checks_24h: { type: integer, format: int64 }
+        down_checks_24h: { type: integer, format: int64 }
+    Page:
+      type: object
+      required: [items, limit, offset]
+      properties:
+        limit: { type: integer }
+        offset: { type: integer }
