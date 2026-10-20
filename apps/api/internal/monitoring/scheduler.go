@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/safidy/go-maso/apps/api/internal/application"
+	"github.com/safidy/go-maso/apps/api/internal/monitor"
 )
 
 type commandType uint8
@@ -15,126 +15,128 @@ type commandType uint8
 const (
 	commandSync commandType = iota
 	commandRemove
+	commandBatch
 )
 
-type command struct {
-	kind          commandType
-	app           application.Application
-	applicationID string
-	ack           chan struct{}
+type schedulerCommand struct {
+	kind      commandType
+	monitor   monitor.Monitor
+	monitorID string
+	monitors  []monitor.Monitor
+	ack       chan struct{}
+}
+
+type scheduledMonitor struct {
+	monitor monitor.Monitor
+	nextRun time.Time
+	running bool
 }
 
 type Scheduler struct {
-	applicationRepository *application.Repository
-	monitoringService     *Service
-
-	commands chan command
-	wg       sync.WaitGroup
+	monitorRepository *monitor.Repository
+	monitoringService *Service
+	workerCount       int
+	retention         time.Duration
+	commands          chan schedulerCommand
+	jobs              chan monitor.Monitor
+	completed         chan string
+	wg                sync.WaitGroup
 }
 
 func NewScheduler(
-	applicationRepository *application.Repository,
+	monitorRepository *monitor.Repository,
 	monitoringService *Service,
+	workerCount int,
+	retention time.Duration,
 ) *Scheduler {
 	return &Scheduler{
-		applicationRepository: applicationRepository,
-		monitoringService:     monitoringService,
-		commands:              make(chan command, 64),
+		monitorRepository: monitorRepository,
+		monitoringService: monitoringService,
+		workerCount:       workerCount,
+		retention:         retention,
+		commands:          make(chan schedulerCommand, 64),
+		jobs:              make(chan monitor.Monitor, workerCount*4),
+		completed:         make(chan string, workerCount*2),
 	}
 }
 
 func (s *Scheduler) Start(ctx context.Context) error {
-	applications, err := s.applicationRepository.ListEnabled(ctx)
+	monitors, err := s.monitorRepository.ListEnabled(ctx)
 	if err != nil {
 		return err
 	}
 
-	slog.Info(
-		"starting monitoring scheduler",
-		"applications", len(applications),
-	)
+	slog.Info("starting monitoring scheduler", "monitors", len(monitors), "workers", s.workerCount)
 
 	s.wg.Add(1)
+	go s.run(ctx, monitors)
 
-	go s.run(ctx, applications)
+	for workerID := 1; workerID <= s.workerCount; workerID++ {
+		s.wg.Add(1)
+		go s.worker(ctx, workerID)
+	}
+
+	s.wg.Add(1)
+	go s.retentionLoop(ctx)
 
 	return nil
 }
 
-func (s *Scheduler) Sync(
-	ctx context.Context,
-	app application.Application,
-) error {
-	cmd := command{
-		kind: commandSync,
-		app:  app,
-		ack:  make(chan struct{}),
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case s.commands <- cmd:
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case <-cmd.ack:
-		return nil
-	}
+func (s *Scheduler) Sync(ctx context.Context, target monitor.Monitor) error {
+	return s.submit(ctx, schedulerCommand{kind: commandSync, monitor: target, ack: make(chan struct{})})
 }
 
-func (s *Scheduler) Remove(
-	ctx context.Context,
-	applicationID string,
-) error {
-	cmd := command{
-		kind:          commandRemove,
-		applicationID: applicationID,
-		ack:           make(chan struct{}),
+func (s *Scheduler) Remove(ctx context.Context, monitorID string) error {
+	return s.submit(ctx, schedulerCommand{kind: commandRemove, monitorID: monitorID, ack: make(chan struct{})})
+}
+
+func (s *Scheduler) RefreshEnvironment(ctx context.Context, environmentID string) error {
+	monitors, err := s.monitorRepository.ListForSchedulingByEnvironment(ctx, environmentID)
+	if err != nil {
+		return err
 	}
+	return s.submit(ctx, schedulerCommand{kind: commandBatch, monitors: monitors, ack: make(chan struct{})})
+}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case s.commands <- cmd:
+func (s *Scheduler) RefreshApplication(ctx context.Context, applicationID string) error {
+	monitors, err := s.monitorRepository.ListForSchedulingByApplication(ctx, applicationID)
+	if err != nil {
+		return err
 	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case <-cmd.ack:
-		return nil
-	}
+	return s.submit(ctx, schedulerCommand{kind: commandBatch, monitors: monitors, ack: make(chan struct{})})
 }
 
 func (s *Scheduler) Wait() {
 	s.wg.Wait()
 }
 
-func (s *Scheduler) run(
-	ctx context.Context,
-	initialApplications []application.Application,
-) {
-	defer s.wg.Done()
-
-	workers := make(map[string]context.CancelFunc)
-
-	// Reconstruction des workers au démarrage.
-	for _, app := range initialApplications {
-		s.replaceWorker(ctx, workers, app)
+func (s *Scheduler) submit(ctx context.Context, command schedulerCommand) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.commands <- command:
 	}
 
-	defer func() {
-		for _, cancel := range workers {
-			cancel()
-		}
-	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-command.ack:
+		return nil
+	}
+}
+
+func (s *Scheduler) run(ctx context.Context, initial []monitor.Monitor) {
+	defer s.wg.Done()
+
+	scheduled := make(map[string]*scheduledMonitor)
+	now := time.Now()
+	for _, target := range initial {
+		target := target
+		scheduled[target.ID] = &scheduledMonitor{monitor: target, nextRun: now}
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -142,163 +144,123 @@ func (s *Scheduler) run(
 			slog.Info("monitoring scheduler stopping")
 			return
 
-		case cmd := <-s.commands:
-			switch cmd.kind {
+		case command := <-s.commands:
+			s.applyCommand(scheduled, command)
+			close(command.ack)
 
-			case commandSync:
-				s.replaceWorker(
-					ctx,
-					workers,
-					cmd.app,
-				)
-
-			case commandRemove:
-				s.removeWorker(
-					workers,
-					cmd.applicationID,
-				)
+		case monitorID := <-s.completed:
+			if item := scheduled[monitorID]; item != nil {
+				item.running = false
 			}
 
-			close(cmd.ack)
+		case tickedAt := <-ticker.C:
+			for _, item := range scheduled {
+				if item.running || tickedAt.Before(item.nextRun) {
+					continue
+				}
+
+				select {
+				case s.jobs <- item.monitor:
+					item.running = true
+					item.nextRun = tickedAt.Add(time.Duration(item.monitor.CheckIntervalSeconds) * time.Second)
+				default:
+					// The bounded queue is full. Leave the monitor due so it is
+					// retried on the next scheduler tick without spawning work.
+				}
+			}
 		}
 	}
 }
 
-func (s *Scheduler) replaceWorker(
-	parent context.Context,
-	workers map[string]context.CancelFunc,
-	app application.Application,
-) {
-	// S'il existe déjà, on arrête l'ancien worker.
-	if cancel, exists := workers[app.ID]; exists {
-		cancel()
-		delete(workers, app.ID)
+func (s *Scheduler) applyCommand(scheduled map[string]*scheduledMonitor, command schedulerCommand) {
+	now := time.Now()
+	apply := func(target monitor.Monitor) {
+		if !target.EffectiveEnabled {
+			delete(scheduled, target.ID)
+			return
+		}
 
-		slog.Info(
-			"monitor worker stopped for reload",
-			"application", app.Name,
-			"application_id", app.ID,
-		)
+		running := false
+		if existing := scheduled[target.ID]; existing != nil {
+			running = existing.running
+		}
+		scheduled[target.ID] = &scheduledMonitor{
+			monitor: target,
+			nextRun: now,
+			running: running,
+		}
 	}
 
-	// Une application désactivée ne doit pas avoir de worker.
-	if !app.Enabled {
-		slog.Info(
-			"monitor disabled",
-			"application", app.Name,
-			"application_id", app.ID,
-		)
-
-		return
+	switch command.kind {
+	case commandSync:
+		apply(command.monitor)
+	case commandRemove:
+		delete(scheduled, command.monitorID)
+	case commandBatch:
+		for _, target := range command.monitors {
+			apply(target)
+		}
 	}
-
-	workerCtx, cancel := context.WithCancel(parent)
-
-	workers[app.ID] = cancel
-
-	s.wg.Add(1)
-
-	go s.monitorApplication(
-		workerCtx,
-		app,
-	)
 }
 
-func (s *Scheduler) removeWorker(
-	workers map[string]context.CancelFunc,
-	applicationID string,
-) {
-	cancel, exists := workers[applicationID]
-
-	if !exists {
-		return
-	}
-
-	cancel()
-	delete(workers, applicationID)
-
-	slog.Info(
-		"monitor worker removed",
-		"application_id", applicationID,
-	)
-}
-
-func (s *Scheduler) monitorApplication(
-	ctx context.Context,
-	app application.Application,
-) {
+func (s *Scheduler) worker(ctx context.Context, workerID int) {
 	defer s.wg.Done()
-
-	interval := time.Duration(
-		app.CheckIntervalSeconds,
-	) * time.Second
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	slog.Info(
-		"monitor started",
-		"application", app.Name,
-		"application_id", app.ID,
-		"interval", interval,
-	)
-
-	// Check immédiat.
-	s.runCheck(ctx, app)
 
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info(
-				"monitor stopped",
-				"application", app.Name,
-				"application_id", app.ID,
-			)
-
 			return
+		case target := <-s.jobs:
+			result, err := s.monitoringService.CheckScheduledMonitor(ctx, target.ID)
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, ErrMonitorDisabled) && !errors.Is(err, monitor.ErrNotFound) {
+				slog.Error("automatic monitor check failed", "worker", workerID, "monitor_id", target.ID, "error", err)
+			} else if err == nil {
+				slog.Info(
+					"automatic monitor check completed",
+					"worker", workerID,
+					"monitor_id", target.ID,
+					"outcome", result.Outcome,
+					"status", result.ComputedStatus,
+					"response_time_ms", result.ResponseTimeMS,
+				)
+			}
 
-		case <-ticker.C:
-			s.runCheck(ctx, app)
+			select {
+			case s.completed <- target.ID:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 }
 
-func (s *Scheduler) runCheck(
-	ctx context.Context,
-	app application.Application,
-) {
-	checkCtx, cancel := context.WithTimeout(
-		ctx,
-		10*time.Second,
-	)
+func (s *Scheduler) retentionLoop(ctx context.Context) {
+	defer s.wg.Done()
 
-	defer cancel()
+	s.cleanupExpiredResults(ctx)
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
 
-	result, err := s.monitoringService.CheckApplication(
-		checkCtx,
-		app.ID,
-	)
-
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			s.cleanupExpiredResults(ctx)
 		}
+	}
+}
 
-		slog.Error(
-			"automatic health check failed",
-			"application", app.Name,
-			"application_id", app.ID,
-			"error", err,
-		)
-
+func (s *Scheduler) cleanupExpiredResults(ctx context.Context) {
+	deleted, err := s.monitoringService.DeleteExpiredResults(ctx, s.retention)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("failed to delete expired check results", "error", err)
+		}
 		return
 	}
 
-	slog.Info(
-		"health check completed",
-		"application", app.Name,
-		"status", result.Status,
-		"status_code", result.StatusCode,
-		"response_time_ms", result.ResponseTimeMS,
-	)
+	if deleted > 0 {
+		slog.Info("expired check results deleted", "count", deleted)
+	}
 }
