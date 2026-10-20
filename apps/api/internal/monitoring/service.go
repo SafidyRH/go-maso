@@ -2,95 +2,73 @@ package monitoring
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
-	"github.com/safidy/go-maso/apps/api/internal/application"
+	"github.com/safidy/go-maso/apps/api/internal/monitor"
 )
 
+var ErrMonitorDisabled = errors.New("monitor is disabled")
+
 type Service struct {
-	applicationRepository *application.Repository
-	monitoringRepository  *Repository
-	checker               *Checker
+	monitorRepository    *monitor.Repository
+	monitoringRepository *Repository
+	checker              *Checker
 }
 
 func NewService(
-	applicationRepository *application.Repository,
+	monitorRepository *monitor.Repository,
 	monitoringRepository *Repository,
 	checker *Checker,
 ) *Service {
 	return &Service{
-		applicationRepository: applicationRepository,
-		monitoringRepository:  monitoringRepository,
-		checker:               checker,
+		monitorRepository:    monitorRepository,
+		monitoringRepository: monitoringRepository,
+		checker:              checker,
 	}
 }
 
-func (s *Service) CheckApplication(
-	ctx context.Context,
-	applicationID string,
-) (HealthCheck, error) {
-	app, err := s.applicationRepository.GetByID(
-		ctx,
-		applicationID,
-	)
+func (s *Service) CheckMonitor(ctx context.Context, monitorID string) (CheckResult, error) {
+	return s.check(ctx, monitorID, false)
+}
 
+func (s *Service) CheckScheduledMonitor(ctx context.Context, monitorID string) (CheckResult, error) {
+	return s.check(ctx, monitorID, true)
+}
+
+func (s *Service) check(ctx context.Context, monitorID string, requireEnabled bool) (CheckResult, error) {
+	target, err := s.monitorRepository.GetByID(ctx, monitorID)
 	if err != nil {
-		return HealthCheck{}, err
+		return CheckResult{}, err
+	}
+	if requireEnabled && !target.EffectiveEnabled {
+		return CheckResult{}, ErrMonitorDisabled
 	}
 
-	check := s.checker.Check(ctx, app)
-
-	result, err := s.monitoringRepository.Create(
-		ctx,
-		check,
-	)
-
+	check := s.checker.Check(ctx, target)
+	result, err := s.monitoringRepository.Record(ctx, check)
 	if err != nil {
-		return HealthCheck{}, fmt.Errorf(
-			"save health check: %w",
-			err,
-		)
+		return CheckResult{}, fmt.Errorf("save check result: %w", err)
 	}
 
 	return result, nil
 }
 
-func (s *Service) GetHistory(
-	ctx context.Context,
-	applicationID string,
-	limit int,
-) ([]HealthCheck, error) {
-	_, err := s.applicationRepository.GetByID(
-		ctx,
-		applicationID,
-	)
-
-	if err != nil {
+func (s *Service) GetHistory(ctx context.Context, monitorID string, limit int) ([]CheckResult, error) {
+	if _, err := s.monitorRepository.GetByID(ctx, monitorID); err != nil {
 		return nil, err
 	}
-
-	return s.monitoringRepository.ListByApplication(
-		ctx,
-		applicationID,
-		limit,
-	)
+	return s.monitoringRepository.ListByMonitor(ctx, monitorID, limit)
 }
 
-func (s *Service) GetSummary(
-	ctx context.Context,
-	applicationID string,
-) (Summary, error) {
-	_, err := s.applicationRepository.GetByID(
-		ctx,
-		applicationID,
-	)
-
-	if err != nil {
+func (s *Service) GetSummary(ctx context.Context, monitorID string) (Summary, error) {
+	if _, err := s.monitorRepository.GetByID(ctx, monitorID); err != nil {
 		return Summary{}, err
 	}
+	return s.monitoringRepository.GetSummary(ctx, monitorID)
+}
 
-	return s.monitoringRepository.GetSummary(
-		ctx,
-		applicationID,
-	)
+func (s *Service) DeleteExpiredResults(ctx context.Context, retention time.Duration) (int64, error) {
+	return s.monitoringRepository.DeleteOlderThan(ctx, time.Now().UTC().Add(-retention))
 }

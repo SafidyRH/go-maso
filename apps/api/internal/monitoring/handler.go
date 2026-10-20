@@ -1,13 +1,13 @@
 package monitoring
 
 import (
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 
-	"github.com/safidy/go-maso/apps/api/internal/application"
+	"github.com/safidy/go-maso/apps/api/internal/httpapi"
+	"github.com/safidy/go-maso/apps/api/internal/monitor"
 )
 
 type Handler struct {
@@ -15,197 +15,80 @@ type Handler struct {
 }
 
 func NewHandler(service *Service) *Handler {
-	return &Handler{
-		service: service,
-	}
+	return &Handler{service: service}
 }
 
-func (h *Handler) RegisterRoutes(
-	mux *http.ServeMux,
-) {
-	mux.HandleFunc(
-		"POST /applications/{id}/check",
-		h.checkApplication,
-	)
-
-	mux.HandleFunc(
-		"GET /applications/{id}/checks",
-		h.listChecks,
-	)
-
-	mux.HandleFunc(
-		"GET /applications/{id}/monitoring-summary",
-		h.getSummary,
-	)
+func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /monitors/{id}/check", h.checkMonitor)
+	mux.HandleFunc("GET /monitors/{id}/checks", h.listChecks)
+	mux.HandleFunc("GET /monitors/{id}/monitoring-summary", h.getSummary)
 }
 
-func (h *Handler) checkApplication(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	applicationID := r.PathValue("id")
-
-	result, err := h.service.CheckApplication(
-		r.Context(),
-		applicationID,
-	)
-
-	if errors.Is(err, application.ErrNotFound) {
-		http.Error(
-			w,
-			`{"error":"application not found"}`,
-			http.StatusNotFound,
-		)
+func (h *Handler) checkMonitor(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !httpapi.RequireUUID(w, id) {
 		return
 	}
-
+	result, err := h.service.CheckMonitor(r.Context(), id)
+	if errors.Is(err, monitor.ErrNotFound) {
+		httpapi.WriteError(w, http.StatusNotFound, "monitor not found")
+		return
+	}
 	if err != nil {
-		slog.Error(
-			"failed to check application",
-			"application_id",
-			applicationID,
-			"error",
-			err,
-		)
-
-		http.Error(
-			w,
-			`{"error":"failed to check application"}`,
-			http.StatusInternalServerError,
-		)
-
+		h.internalError(w, "check monitor", err)
 		return
 	}
 
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(result); err != nil {
-		slog.Error(
-			"failed to encode health check",
-			"error",
-			err,
-		)
-	}
+	httpapi.WriteJSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) listChecks(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	applicationID := r.PathValue("id")
-
+func (h *Handler) listChecks(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !httpapi.RequireUUID(w, id) {
+		return
+	}
 	limit := 50
-
 	if value := r.URL.Query().Get("limit"); value != "" {
 		parsed, err := strconv.Atoi(value)
-
 		if err != nil || parsed < 1 || parsed > 200 {
-			http.Error(
-				w,
-				`{"error":"limit must be between 1 and 200"}`,
-				http.StatusBadRequest,
-			)
-
+			httpapi.WriteError(w, http.StatusBadRequest, "limit must be between 1 and 200")
 			return
 		}
-
 		limit = parsed
 	}
 
-	checks, err := h.service.GetHistory(
-		r.Context(),
-		applicationID,
-		limit,
-	)
-
-	if errors.Is(err, application.ErrNotFound) {
-		http.Error(
-			w,
-			`{"error":"application not found"}`,
-			http.StatusNotFound,
-		)
-
+	results, err := h.service.GetHistory(r.Context(), id, limit)
+	if errors.Is(err, monitor.ErrNotFound) {
+		httpapi.WriteError(w, http.StatusNotFound, "monitor not found")
 		return
 	}
-
 	if err != nil {
-		slog.Error(
-			"failed to get monitoring history",
-			"application_id", applicationID,
-			"error", err,
-		)
-
-		http.Error(
-			w,
-			`{"error":"failed to get monitoring history"}`,
-			http.StatusInternalServerError,
-		)
-
+		h.internalError(w, "get monitor history", err)
 		return
 	}
 
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
-
-	if err := json.NewEncoder(w).Encode(checks); err != nil {
-		slog.Error(
-			"failed to encode monitoring history",
-			"error", err,
-		)
-	}
+	httpapi.WriteJSON(w, http.StatusOK, results)
 }
 
-func (h *Handler) getSummary(
-	w http.ResponseWriter,
-	r *http.Request,
-) {
-	applicationID := r.PathValue("id")
-
-	summary, err := h.service.GetSummary(
-		r.Context(),
-		applicationID,
-	)
-
-	if errors.Is(err, application.ErrNotFound) {
-		http.Error(
-			w,
-			`{"error":"application not found"}`,
-			http.StatusNotFound,
-		)
-
+func (h *Handler) getSummary(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !httpapi.RequireUUID(w, id) {
 		return
 	}
-
+	summary, err := h.service.GetSummary(r.Context(), id)
+	if errors.Is(err, monitor.ErrNotFound) {
+		httpapi.WriteError(w, http.StatusNotFound, "monitor not found")
+		return
+	}
 	if err != nil {
-		slog.Error(
-			"failed to get monitoring summary",
-			"application_id", applicationID,
-			"error", err,
-		)
-
-		http.Error(
-			w,
-			`{"error":"failed to get monitoring summary"}`,
-			http.StatusInternalServerError,
-		)
-
+		h.internalError(w, "get monitoring summary", err)
 		return
 	}
 
-	w.Header().Set(
-		"Content-Type",
-		"application/json",
-	)
+	httpapi.WriteJSON(w, http.StatusOK, summary)
+}
 
-	if err := json.NewEncoder(w).Encode(summary); err != nil {
-		slog.Error(
-			"failed to encode monitoring summary",
-			"error", err,
-		)
-	}
+func (h *Handler) internalError(w http.ResponseWriter, operation string, err error) {
+	slog.Error("monitoring request failed", "operation", operation, "error", err)
+	httpapi.WriteError(w, http.StatusInternalServerError, "internal server error")
 }
