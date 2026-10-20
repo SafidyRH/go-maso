@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b1220" />
+    <meta
+      name="description"
+      content="Go-Maso — centre de contrôle pour la disponibilité et la performance de vos applications."
+    />
+    <title>Go-Maso — Centre de contrôle</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Aller au contenu</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navigation principale">
+        <a class="brand" href="#/" aria-label="Go-Maso, accueil">
+          <span class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </span>
+          <span>
+            <strong>Go—Maso</strong>
+            <small>Control room</small>
+          </span>
+        </a>
+
+        <nav class="main-nav">
+          <a class="nav-item is-active" href="#/" aria-current="page">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
+            Vue d’ensemble
+          </a>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="system-indicator">
+            <span class="pulse-dot" aria-hidden="true"></span>
+            <span><strong>Supervision active</strong><small id="polling-label">Actualisation toutes les 30 s</small></span>
+          </div>
+          <p>Heures affichées dans <strong id="timezone-sidebar">—</strong></p>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="topbar">
+          <button class="mobile-brand" type="button" data-action="home" aria-label="Revenir à l’accueil">
+            <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+            <strong>Go—Maso</strong>
+          </button>
+          <div class="topbar-meta">
+            <span class="utc-note"><span aria-hidden="true">◷</span> Source UTC · <span id="local-timezone">—</span></span>
+            <button class="icon-button" type="button" data-action="refresh" aria-label="Actualiser les données">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-3M4 4v4h4m-4 5a8.1 8.1 0 0 0 15.5 3M20 20v-4h-4"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <main id="main-content" tabindex="-1">
+          <div id="app" aria-live="polite"></div>
+        </main>
+      </div>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="assertive" aria-atomic="true"></div>
+    <noscript>
+      <div class="noscript">Go-Maso a besoin de JavaScript pour afficher les données de supervision.</div>
+    </noscript>
+  </body>
+</html>
