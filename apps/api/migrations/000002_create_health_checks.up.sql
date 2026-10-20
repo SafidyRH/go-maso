@@ -1,4 +1,4 @@
-CREATE TABLE health_checks (
+CREATE TABLE IF NOT EXISTS health_checks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     application_id UUID NOT NULL
@@ -18,5 +18,5 @@ CREATE TABLE health_checks (
     checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_health_checks_application_checked_at
+CREATE INDEX IF NOT EXISTS idx_health_checks_application_checked_at
     ON health_checks(application_id, checked_at DESC);
