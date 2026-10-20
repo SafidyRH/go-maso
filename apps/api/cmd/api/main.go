@@ -14,6 +14,8 @@ import (
 	"github.com/safidy/go-maso/apps/api/internal/config"
 	"github.com/safidy/go-maso/apps/api/internal/dashboard"
 	"github.com/safidy/go-maso/apps/api/internal/database"
+	"github.com/safidy/go-maso/apps/api/internal/environment"
+	"github.com/safidy/go-maso/apps/api/internal/monitor"
 	"github.com/safidy/go-maso/apps/api/internal/monitoring"
 )
 
@@ -52,39 +54,53 @@ func main() {
 	mux := http.NewServeMux()
 
 	applicationRepository := application.NewRepository(db)
+	environmentRepository := environment.NewRepository(db)
+	monitorRepository := monitor.NewRepository(db)
 
 	monitoringRepository := monitoring.NewRepository(db)
 
 	dashboardRepository := dashboard.NewRepository(db)
 
-	checker := monitoring.NewChecker(
-		5 * time.Second,
-	)
+	networkPolicy := monitoring.NewNetworkPolicy()
+	checker := monitoring.NewChecker(networkPolicy)
 
 	dashboardHandler := dashboard.NewHandler(
 		dashboardRepository,
 	)
 
 	monitoringService := monitoring.NewService(
-		applicationRepository,
+		monitorRepository,
 		monitoringRepository,
 		checker,
 	)
 
 	scheduler := monitoring.NewScheduler(
-		applicationRepository,
+		monitorRepository,
 		monitoringService,
+		cfg.MonitorWorkers,
+		time.Duration(cfg.RetentionDays)*24*time.Hour,
 	)
 
-	// Application HTTP
 	applicationHandler := application.NewHandler(
 		applicationRepository,
 		scheduler,
 	)
+	environmentHandler := environment.NewHandler(
+		environmentRepository,
+		applicationRepository,
+		scheduler,
+	)
+	monitorHandler := monitor.NewHandler(
+		monitorRepository,
+		environmentRepository,
+		scheduler,
+		networkPolicy,
+	)
 
 	applicationHandler.RegisterRoutes(mux)
+	environmentHandler.RegisterRoutes(mux)
+	monitorHandler.RegisterRoutes(mux)
 
-	// Monitoring HTTP
 	monitoringHandler := monitoring.NewHandler(
 		monitoringService,
 	)
@@ -92,16 +108,35 @@ func main() {
 	monitoringHandler.RegisterRoutes(mux)
 	dashboardHandler.RegisterRoutes(mux)
 
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+	livenessHandler := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		response := HealthResponse{
+			Status:    "ok",
+			Service:   "go-maso-api",
+			Database:  "unchecked",
+			Timestamp: time.Now().UTC(),
+		}
+
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			slog.Error("failed to encode liveness response", "error", err)
+		}
+	}
+
+	readinessHandler := func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 
+		w.Header().Set("Content-Type", "application/json")
+
 		if err := db.Ping(ctx); err != nil {
-			http.Error(
-				w,
-				`{"status":"error","database":"down"}`,
-				http.StatusServiceUnavailable,
-			)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(HealthResponse{
+				Status:    "error",
+				Service:   "go-maso-api",
+				Database:  "down",
+				Timestamp: time.Now().UTC(),
+			})
 			return
 		}
 
@@ -109,36 +144,30 @@ func main() {
 			Status:    "ok",
 			Service:   "go-maso-api",
 			Database:  "up",
-			Timestamp: time.Now(),
+			Timestamp: time.Now().UTC(),
 		}
-
-		w.Header().Set("Content-Type", "application/json")
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			slog.Error("failed to encode response", "error", err)
 		}
-	})
-
-	server := &http.Server{
-		Addr:         ":8080",
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
 	}
 
-	slog.Info("Go-Maso API started", "port", 8080)
+	mux.HandleFunc("GET /healthz", livenessHandler)
+	mux.HandleFunc("GET /readyz", readinessHandler)
+	// Kept as a compatibility alias for the endpoint exposed by the prototype.
+	mux.HandleFunc("GET /health", readinessHandler)
+
+	server := &http.Server{
+		Addr:              cfg.HTTPAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      70 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
 
 	serverErrors := make(chan error, 1)
-
-	go func() {
-		slog.Info(
-			"Go-Maso API started",
-			"port", 8080,
-		)
-
-		serverErrors <- server.ListenAndServe()
-	}()
 
 	if err := scheduler.Start(ctx); err != nil {
 		slog.Error(
@@ -148,6 +177,15 @@ func main() {
 
 		os.Exit(1)
 	}
+
+	go func() {
+		slog.Info(
+			"Go-Maso API started",
+			"address", cfg.HTTPAddress,
+		)
+
+		serverErrors <- server.ListenAndServe()
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -166,7 +204,7 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(
 		context.Background(),
-		10*time.Second,
+		cfg.ShutdownTimeout,
 	)
 
 	defer cancel()
