@@ -17,6 +17,7 @@ import (
 	"github.com/safidy/go-maso/apps/api/internal/environment"
 	"github.com/safidy/go-maso/apps/api/internal/monitor"
 	"github.com/safidy/go-maso/apps/api/internal/monitoring"
+	"github.com/safidy/go-maso/apps/api/internal/webui"
 )
 
 type HealthResponse struct {
@@ -156,6 +157,8 @@ func main() {
 	mux.HandleFunc("GET /readyz", readinessHandler)
 	// Kept as a compatibility alias for the endpoint exposed by the prototype.
 	mux.HandleFunc("GET /health", readinessHandler)
+
+	webui.NewHandler().RegisterRoutes(mux)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress,
