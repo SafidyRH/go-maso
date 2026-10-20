@@ -314,6 +314,36 @@ paths:
       responses:
         "200":
           description: Application dashboard rows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApplicationOverview"
+
+  /dashboard/applications/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: period_hours
+        in: query
+        description: Analysis period used for statistics and timeline buckets.
+        schema:
+          type: integer
+          enum: [1, 6, 24, 168, 720]
+          default: 24
+    get:
+      summary: Get an operational application dashboard
+      responses:
+        "200":
+          description: Application metadata, period statistics, environments, monitors, timeline, and recent events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationDashboard"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
 components:
   parameters:
@@ -507,6 +537,102 @@ components:
         total_checks_24h: { type: integer, format: int64 }
         up_checks_24h: { type: integer, format: int64 }
         down_checks_24h: { type: integer, format: int64 }
+    ApplicationOverview:
+      type: object
+      required: [id, name, owner, status, monitors, last_status_code, last_response_time_ms, uptime_24h, average_response_time_ms, total_checks_24h, up_checks_24h, down_checks_24h]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        owner: { type: string }
+        status: { $ref: "#/components/schemas/MonitorStatus" }
+        monitors: { type: integer, format: int64 }
+        last_status_code: { type: integer }
+        last_response_time_ms: { type: integer, format: int64 }
+        last_checked_at: { type: string, format: date-time }
+        uptime_24h: { type: number, minimum: 0, maximum: 100 }
+        average_response_time_ms: { type: number }
+        total_checks_24h: { type: integer, format: int64 }
+        up_checks_24h: { type: integer, format: int64 }
+        down_checks_24h: { type: integer, format: int64 }
+    ApplicationDashboard:
+      allOf:
+        - $ref: "#/components/schemas/ApplicationOverview"
+        - type: object
+          required: [period_hours, period_summary, generated_at, environments, timeline, recent_events]
+          properties:
+            period_hours: { type: integer, enum: [1, 6, 24, 168, 720] }
+            period_summary: { $ref: "#/components/schemas/PeriodSummary" }
+            generated_at: { type: string, format: date-time }
+            environments:
+              type: array
+              items: { $ref: "#/components/schemas/DashboardEnvironment" }
+            timeline:
+              type: array
+              items: { $ref: "#/components/schemas/MetricPoint" }
+            recent_events:
+              type: array
+              items: { $ref: "#/components/schemas/RecentEvent" }
+    PeriodSummary:
+      type: object
+      required: [uptime, average_response_time_ms, total_checks, up_checks, down_checks]
+      properties:
+        uptime: { type: number, minimum: 0, maximum: 100 }
+        average_response_time_ms: { type: number }
+        total_checks: { type: integer, format: int64 }
+        up_checks: { type: integer, format: int64 }
+        down_checks: { type: integer, format: int64 }
+    DashboardEnvironment:
+      type: object
+      required: [id, name, base_url, enabled, status, monitors]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        base_url: { type: string, format: uri }
+        enabled: { type: boolean }
+        status: { $ref: "#/components/schemas/MonitorStatus" }
+        monitors:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardMonitor" }
+    DashboardMonitor:
+      type: object
+      required: [id, environment_id, name, url, method, enabled, effective_enabled, status, last_status_code, last_response_time_ms, uptime, average_response_time_ms, total_checks]
+      properties:
+        id: { type: string, format: uuid }
+        environment_id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string, format: uri }
+        method: { type: string, enum: [GET, HEAD] }
+        enabled: { type: boolean }
+        effective_enabled: { type: boolean }
+        status: { $ref: "#/components/schemas/MonitorStatus" }
+        last_status_code: { type: integer }
+        last_response_time_ms: { type: integer, format: int64 }
+        last_checked_at: { type: string, format: date-time }
+        uptime: { type: number, minimum: 0, maximum: 100 }
+        average_response_time_ms: { type: number }
+        total_checks: { type: integer, format: int64 }
+    MetricPoint:
+      type: object
+      required: [timestamp, uptime, average_response_time_ms, checks]
+      properties:
+        timestamp: { type: string, format: date-time }
+        uptime: { type: number, minimum: 0, maximum: 100 }
+        average_response_time_ms: { type: number }
+        checks: { type: integer, format: int64 }
+    RecentEvent:
+      type: object
+      required: [id, monitor_id, monitor_name, environment_name, outcome, computed_status, status_code, response_time_ms, checked_at]
+      properties:
+        id: { type: string, format: uuid }
+        monitor_id: { type: string, format: uuid }
+        monitor_name: { type: string }
+        environment_name: { type: string }
+        outcome: { type: string, enum: [UP, DOWN] }
+        computed_status: { $ref: "#/components/schemas/MonitorStatus" }
+        status_code: { type: integer }
+        response_time_ms: { type: integer, format: int64 }
+        error_message: { type: string }
+        checked_at: { type: string, format: date-time }
     Page:
       type: object
       required: [items, limit, offset]

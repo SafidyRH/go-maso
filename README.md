@@ -1,6 +1,6 @@
 # Go-Maso
 
-Go-Maso is a lightweight monitoring platform. The current implementation contains the Go API, PostgreSQL persistence, HTTP checks, scheduling, monitoring history, and dashboard aggregates.
+Go-Maso is a lightweight monitoring platform. The current implementation contains the Go API, PostgreSQL persistence, HTTP checks, scheduling, monitoring history, and an embedded operational dashboard.
 
 ## Requirements
 
@@ -39,6 +39,8 @@ Invoke-RestMethod http://localhost:8080/readyz
 ```
 
 `GET /health` remains available as a compatibility alias for `GET /readyz`.
+
+Open `http://localhost:8080` to use the dashboard. The interface is embedded in the API binary, requires no separate frontend process, refreshes every 30 seconds, and displays UTC timestamps in the browser's local time zone.
 
 ## Database migrations
 
@@ -90,6 +92,7 @@ See `.env.example` for local values. The application does not automatically load
 - `GET /monitors/{id}/checks`
 - `GET /monitors/{id}/monitoring-summary`
 - `GET /dashboard`
+- `GET /dashboard/applications/{id}?period_hours=24`
 
 The complete request and response contract is in `docs/openapi.yaml`.
 

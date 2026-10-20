@@ -159,7 +159,7 @@ Des travaux précédents ont déjà porté sur le **bootstrap Go**, une **API la
 
 ### Phase 4 — Dashboard opérationnel **(MVP utilisable)**
 
-**Statut :** `À faire`  
+**Statut :** `Terminé` — dashboard opérationnel validé le 20 octobre 2026
 **Objectif :** visualiser en quelques secondes l'état de tous les projets.
 
 **Travaux :**
