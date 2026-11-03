@@ -63,6 +63,8 @@ func TestUpAgainstPostgres(t *testing.T) {
 		"incidents",
 		"incident_events",
 		"notification_deliveries",
+		"users",
+		"user_sessions",
 		"schema_migrations",
 	} {
 		var exists bool
@@ -78,8 +80,8 @@ func TestUpAgainstPostgres(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&versions); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if versions != 4 {
-		t.Fatalf("applied migration count = %d, want 4", versions)
+	if versions != 5 {
+		t.Fatalf("applied migration count = %d, want 5", versions)
 	}
 }
 
