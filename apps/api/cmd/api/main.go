@@ -15,6 +15,7 @@ import (
 	"github.com/safidy/go-maso/apps/api/internal/dashboard"
 	"github.com/safidy/go-maso/apps/api/internal/database"
 	"github.com/safidy/go-maso/apps/api/internal/environment"
+	"github.com/safidy/go-maso/apps/api/internal/incident"
 	"github.com/safidy/go-maso/apps/api/internal/monitor"
 	"github.com/safidy/go-maso/apps/api/internal/monitoring"
 	"github.com/safidy/go-maso/apps/api/internal/webui"
@@ -59,6 +60,8 @@ func main() {
 	monitorRepository := monitor.NewRepository(db)
 
 	monitoringRepository := monitoring.NewRepository(db)
+	incidentRepository := incident.NewRepository(db)
+	incidentEngine := incident.NewEngine(incidentRepository)
 
 	dashboardRepository := dashboard.NewRepository(db)
 
@@ -73,6 +76,7 @@ func main() {
 		monitorRepository,
 		monitoringRepository,
 		checker,
+		incidentEngine,
 	)
 
 	scheduler := monitoring.NewScheduler(

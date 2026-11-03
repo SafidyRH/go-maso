@@ -11,21 +11,28 @@ import (
 
 var ErrMonitorDisabled = errors.New("monitor is disabled")
 
+type CheckObserver interface {
+	Observe(context.Context, monitor.Monitor, CheckResult) error
+}
+
 type Service struct {
 	monitorRepository    *monitor.Repository
 	monitoringRepository *Repository
 	checker              *Checker
+	observer             CheckObserver
 }
 
 func NewService(
 	monitorRepository *monitor.Repository,
 	monitoringRepository *Repository,
 	checker *Checker,
+	observer CheckObserver,
 ) *Service {
 	return &Service{
 		monitorRepository:    monitorRepository,
 		monitoringRepository: monitoringRepository,
 		checker:              checker,
+		observer:             observer,
 	}
 }
 
@@ -50,6 +57,11 @@ func (s *Service) check(ctx context.Context, monitorID string, requireEnabled bo
 	result, err := s.monitoringRepository.Record(ctx, check)
 	if err != nil {
 		return CheckResult{}, fmt.Errorf("save check result: %w", err)
+	}
+	if s.observer != nil {
+		if err := s.observer.Observe(ctx, target, result); err != nil {
+			return result, fmt.Errorf("process check observation: %w", err)
+		}
 	}
 
 	return result, nil
