@@ -29,7 +29,7 @@ func (r *Repository) RecoverInterruptedDeliveries(ctx context.Context) error {
 		    last_error = 'delivery interrupted before completion',
 		    next_attempt_at = NOW(),
 		    updated_at = NOW()
-		WHERE status = 'SENDING' AND updated_at < NOW() - INTERVAL '5 minutes'
+		WHERE status = 'SENDING'
 	`)
 	if err != nil {
 		return fmt.Errorf("recover interrupted deliveries: %w", err)
