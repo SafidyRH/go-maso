@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/safidy/go-maso/apps/api/internal/application"
+	"github.com/safidy/go-maso/apps/api/internal/auth"
 	"github.com/safidy/go-maso/apps/api/internal/config"
 	"github.com/safidy/go-maso/apps/api/internal/dashboard"
 	"github.com/safidy/go-maso/apps/api/internal/database"
@@ -64,6 +65,21 @@ func main() {
 	incidentEngine := incident.NewEngine(incidentRepository)
 
 	dashboardRepository := dashboard.NewRepository(db)
+	authRepository := auth.NewRepository(db)
+	if err := authRepository.BootstrapAdmin(ctx, cfg.AdminEmail, cfg.AdminPassword); err != nil {
+		slog.Error("failed to bootstrap administrator", "error", err)
+		os.Exit(1)
+	}
+	if err := authRepository.DeleteExpiredSessions(ctx, cfg.SessionIdle); err != nil {
+		slog.Warn("failed to delete expired sessions", "error", err)
+	}
+	authService, err := auth.NewService(authRepository, cfg.SessionAbsolute)
+	if err != nil {
+		slog.Error("failed to initialize authentication", "error", err)
+		os.Exit(1)
+	}
+	authMiddleware := auth.NewMiddleware(authRepository, cfg.SessionIdle, cfg.SessionSecure)
+	authHandler := auth.NewHandler(authService, authRepository, authMiddleware, cfg.TrustProxy)
 
 	networkPolicy := monitoring.NewNetworkPolicy()
 	checker := monitoring.NewChecker(networkPolicy)
@@ -115,6 +131,7 @@ func main() {
 	environmentHandler.RegisterRoutes(mux)
 	monitorHandler.RegisterRoutes(mux)
 	incidentHandler.RegisterRoutes(mux)
+	authHandler.RegisterRoutes(mux)
 
 	monitoringHandler := monitoring.NewHandler(
 		monitoringService,
@@ -176,7 +193,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress,
-		Handler:           mux,
+		Handler:           authMiddleware.Handler(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      70 * time.Second,

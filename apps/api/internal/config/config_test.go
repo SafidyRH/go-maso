@@ -33,6 +33,32 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.RetentionDays != 30 {
 		t.Fatalf("RetentionDays = %d, want 30", cfg.RetentionDays)
 	}
+	if cfg.SessionIdle != 30*time.Minute || cfg.SessionAbsolute != 12*time.Hour {
+		t.Fatalf("session timeouts = (%s, %s), want (30m, 12h)", cfg.SessionIdle, cfg.SessionAbsolute)
+	}
+	if cfg.SessionSecure || cfg.TrustProxy {
+		t.Fatal("secure cookie and proxy trust must default to false for local development")
+	}
+}
+
+func TestLoadRejectsSessionAbsoluteTimeoutBeforeIdleTimeout(t *testing.T) {
+	t.Parallel()
+
+	_, err := load(func(name string) string {
+		switch name {
+		case "DATABASE_URL":
+			return "postgres://example"
+		case "SESSION_IDLE_TIMEOUT":
+			return "2h"
+		case "SESSION_ABSOLUTE_TIMEOUT":
+			return "1h"
+		default:
+			return ""
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "SESSION_ABSOLUTE_TIMEOUT") {
+		t.Fatalf("load error = %v, want session timeout ordering error", err)
+	}
 }
 
 func TestLoadRejectsMissingDatabaseURL(t *testing.T) {

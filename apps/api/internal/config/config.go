@@ -14,6 +14,12 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	MonitorWorkers  int
 	RetentionDays   int
+	AdminEmail      string
+	AdminPassword   string
+	SessionSecure   bool
+	SessionIdle     time.Duration
+	SessionAbsolute time.Duration
+	TrustProxy      bool
 }
 
 func Load() (Config, error) {
@@ -47,13 +53,51 @@ func load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	sessionSecure, err := boolean(getenv, "SESSION_SECURE_COOKIE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionIdle, err := duration(getenv, "SESSION_IDLE_TIMEOUT", 30*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	sessionAbsolute, err := duration(getenv, "SESSION_ABSOLUTE_TIMEOUT", 12*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if sessionAbsolute <= sessionIdle {
+		return Config{}, errors.New("SESSION_ABSOLUTE_TIMEOUT must be greater than SESSION_IDLE_TIMEOUT")
+	}
+	trustProxy, err := boolean(getenv, "TRUST_PROXY_HEADERS", false)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		DatabaseURL:     databaseURL,
 		HTTPAddress:     httpAddress,
 		ShutdownTimeout: shutdownTimeout,
 		MonitorWorkers:  monitorWorkers,
 		RetentionDays:   retentionDays,
+		AdminEmail:      getenv("ADMIN_EMAIL"),
+		AdminPassword:   getenv("ADMIN_PASSWORD"),
+		SessionSecure:   sessionSecure,
+		SessionIdle:     sessionIdle,
+		SessionAbsolute: sessionAbsolute,
+		TrustProxy:      trustProxy,
 	}, nil
+}
+
+func boolean(getenv func(string) string, name string, defaultValue bool) (bool, error) {
+	value := getenv(name)
+	if value == "" {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return parsed, nil
 }
 
 func integer(
