@@ -1,4 +1,44 @@
 services:
+  api:
+    build:
+      context: ./apps/api
+    container_name: go-maso-api
+    restart: unless-stopped
+
+    environment:
+      DATABASE_URL: postgres://gomaso:${POSTGRES_PASSWORD:-gomaso}@postgres:5432/go_maso?sslmode=disable
+      HTTP_ADDRESS: :8080
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@gomaso.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
+      SESSION_SECURE_COOKIE: ${SESSION_SECURE_COOKIE:-false}
+      SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-30m}
+      SESSION_ABSOLUTE_TIMEOUT: ${SESSION_ABSOLUTE_TIMEOUT:-12h}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+      MONITOR_WORKERS: ${MONITOR_WORKERS:-10}
+      RESULT_RETENTION_DAYS: ${RESULT_RETENTION_DAYS:-30}
+
+    ports:
+      - "${API_PORT:-8080}:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
   postgres:
     image: postgres:18-alpine
     container_name: go-maso-postgres
@@ -6,7 +46,7 @@ services:
 
     environment:
       POSTGRES_USER: gomaso
-      POSTGRES_PASSWORD: gomaso
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gomaso}
       POSTGRES_DB: go_maso
 
     ports:

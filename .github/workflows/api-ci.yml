@@ -53,3 +53,7 @@ jobs:
 
       - name: Test with race detector
         run: go test -race ./...
+
+      - name: Build production image
+        working-directory: ../..
+        run: docker build --file apps/api/Dockerfile apps/api
