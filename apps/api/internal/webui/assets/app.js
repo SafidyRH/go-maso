@@ -5,6 +5,7 @@ const PERIOD_LABELS = { 1: "1 heure", 6: "6 heures", 24: "24 heures", 168: "7 jo
 
 const state = {
   applications: null,
+  user: undefined,
   detail: null,
   incidents: [],
   settings: null,
@@ -84,11 +85,14 @@ function route() {
 }
 
 async function api(path, options = {}) {
+  const unsafe = options.method && !["GET", "HEAD", "OPTIONS"].includes(options.method.toUpperCase());
+  const csrfToken = unsafe ? readCookie("__Host-go_maso_csrf") || readCookie("go_maso_csrf") : "";
   const response = await fetch(path, {
     ...options,
     headers: {
       Accept: "application/json",
       ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
       ...(options.headers || {}),
     },
   });
@@ -100,9 +104,39 @@ async function api(path, options = {}) {
     } catch {
       // Keep the status-based fallback when the body is not JSON.
     }
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    if (response.status === 401 && path !== "/auth/login") {
+      state.user = null;
+    }
+    throw error;
   }
   return response.status === 204 ? null : response.json();
+}
+
+function readCookie(name) {
+  const prefix = `${encodeURIComponent(name)}=`;
+  const match = document.cookie.split("; ").find((item) => item.startsWith(prefix));
+  return match ? decodeURIComponent(match.slice(prefix.length)) : "";
+}
+
+async function bootstrap() {
+  state.loading = true;
+  try {
+    state.user = await api("/auth/me");
+    await refreshCurrent();
+  } catch (error) {
+    if (error.status === 401) {
+      state.user = null;
+      state.loading = false;
+      state.error = null;
+      render();
+      return;
+    }
+    state.error = error;
+    state.loading = false;
+    render();
+  }
 }
 
 function setRefreshing(active) {
@@ -194,6 +228,23 @@ function errorTemplate() {
         <h2>Le tableau de bord est indisponible</h2>
         <p>${escapeHTML(state.error?.message || "Une erreur inattendue s’est produite.")}</p>
         <button class="button" type="button" data-action="retry">Réessayer</button>
+      </div>
+    </section>`;
+}
+
+function loginTemplate() {
+  return `
+    <section class="login-view">
+      <div class="login-card">
+        <div class="login-brand"><span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span><span><strong>Go—Maso</strong><small>Accès administrateur</small></span></div>
+        <div class="login-copy"><p class="eyebrow">Centre de contrôle</p><h1>Heureux de vous revoir.</h1><p>Connectez-vous pour accéder aux moniteurs, incidents et configurations sensibles.</p></div>
+        <form class="login-form" data-form="login">
+          <label class="field"><span>Adresse email</span><input name="email" type="email" autocomplete="username" maxlength="254" required autofocus /></label>
+          <label class="field"><span>Mot de passe</span><input name="password" type="password" autocomplete="current-password" minlength="12" maxlength="128" required /></label>
+          <p class="form-error" data-login-error hidden></p>
+          <button class="button login-button" type="submit">Ouvrir le centre de contrôle</button>
+        </form>
+        <p class="login-foot">Session protégée · expiration après inactivité · aucune donnée d’authentification stockée dans le navigateur</p>
       </div>
     </section>`;
 }
@@ -521,6 +572,13 @@ function renderRowsOnly() {
 }
 
 function render() {
+  const authControls = document.querySelector("#auth-controls");
+  authControls.innerHTML = state.user ? `<div class="user-menu"><span>${escapeHTML(state.user.email)}</span><button type="button" data-action="logout">Déconnexion</button></div>` : "";
+  refreshButton.hidden = !state.user;
+  if (state.user === null) {
+    appRoot.innerHTML = loginTemplate();
+    return;
+  }
   if (state.loading) {
     appRoot.innerHTML = loadingTemplate();
     return;
@@ -536,6 +594,7 @@ document.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action === "refresh" || action === "retry") refreshCurrent();
   if (action === "home") window.location.hash = "#/";
+  if (action === "logout") logout();
   if (action === "close-settings" && !event.target.closest("[data-modal-panel]")) closeSettings();
   if (event.target.closest('.modal-close[data-action="close-settings"]')) closeSettings();
 
@@ -570,6 +629,15 @@ document.addEventListener("submit", async (event) => {
   submit.disabled = true;
   try {
     const data = new FormData(form);
+    if (form.dataset.form === "login") {
+      state.user = await api("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email: String(data.get("email")), password: String(data.get("password")) }),
+      });
+      state.error = null;
+      await refreshCurrent();
+      return;
+    }
     const monitorID = form.dataset.monitorId;
     if (form.dataset.form === "alert-rule") {
       const payload = {
@@ -599,10 +667,31 @@ document.addEventListener("submit", async (event) => {
     }
     renderSettings();
   } catch (error) {
-    showToast(error.message);
+    const loginError = form.querySelector("[data-login-error]");
+    if (loginError) {
+      loginError.textContent = error.message;
+      loginError.hidden = false;
+    } else {
+      showToast(error.message);
+    }
     submit.disabled = false;
   }
 });
+
+async function logout() {
+  try {
+    await api("/auth/logout", { method: "POST" });
+  } catch (error) {
+    if (error.status !== 401) showToast(error.message);
+  } finally {
+    state.user = null;
+    state.applications = null;
+    state.detail = null;
+    state.incidents = [];
+    window.location.hash = "#/";
+    render();
+  }
+}
 
 async function acknowledgeIncident(incidentID) {
   const acknowledgedBy = window.prompt("Nom de la personne qui acquitte l’incident :", "Opérateur");
@@ -647,9 +736,12 @@ document.addEventListener("change", (event) => {
 
 window.addEventListener("hashchange", () => {
   state.error = null;
-  refreshCurrent();
+  if (state.user) refreshCurrent();
+  else render();
   document.querySelector("#main-content").focus();
 });
 
-window.setInterval(() => refreshCurrent({ silent: true }), POLL_INTERVAL_MS);
-refreshCurrent();
+window.setInterval(() => {
+  if (state.user) refreshCurrent({ silent: true });
+}, POLL_INTERVAL_MS);
+bootstrap();
