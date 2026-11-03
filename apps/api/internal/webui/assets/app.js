@@ -6,6 +6,8 @@ const PERIOD_LABELS = { 1: "1 heure", 6: "6 heures", 24: "24 heures", 168: "7 jo
 const state = {
   applications: null,
   detail: null,
+  incidents: [],
+  settings: null,
   loading: true,
   refreshing: false,
   error: null,
@@ -81,8 +83,15 @@ function route() {
   return match ? { name: "detail", id: match[1] } : { name: "overview" };
 }
 
-async function api(path) {
-  const response = await fetch(path, { headers: { Accept: "application/json" } });
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      Accept: "application/json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(options.headers || {}),
+    },
+  });
   if (!response.ok) {
     let message = `La requête a échoué (${response.status})`;
     try {
@@ -93,7 +102,7 @@ async function api(path) {
     }
     throw new Error(message);
   }
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 function setRefreshing(active) {
@@ -110,7 +119,10 @@ async function loadOverview({ silent = false } = {}) {
   }
   setRefreshing(true);
   try {
-    state.applications = await api("/dashboard");
+    [state.applications, state.incidents] = await Promise.all([
+      api("/dashboard"),
+      api("/incidents?limit=50"),
+    ]);
     state.error = null;
     state.lastSync = new Date();
   } catch (error) {
@@ -132,7 +144,10 @@ async function loadDetail(applicationID, { silent = false } = {}) {
   }
   setRefreshing(true);
   try {
-    state.detail = await api(`/dashboard/applications/${encodeURIComponent(applicationID)}?period_hours=${state.periodHours}`);
+    [state.detail, state.incidents] = await Promise.all([
+      api(`/dashboard/applications/${encodeURIComponent(applicationID)}?period_hours=${state.periodHours}`),
+      api(`/incidents?application_id=${encodeURIComponent(applicationID)}&limit=100`),
+    ]);
     state.error = null;
     state.lastSync = new Date();
   } catch (error) {
@@ -184,6 +199,7 @@ function errorTemplate() {
 }
 
 function summaryCards(applications) {
+  const activeIncidents = state.incidents.filter((item) => item.status !== "RESOLVED");
   const down = applications.filter((item) => item.status === "DOWN").length;
   const healthy = applications.filter((item) => item.status === "UP").length;
   const measured = applications.filter((item) => item.total_checks_24h > 0);
@@ -194,8 +210,8 @@ function summaryCards(applications) {
     <div class="summary-grid" aria-label="Synthèse des dernières 24 heures">
       <article class="metric-card ${down ? "danger" : "success"}">
         <span class="metric-label"><i></i> Incidents actifs</span>
-        <strong class="metric-value">${down}</strong>
-        <span class="metric-detail">${down ? `${down} application${down > 1 ? "s" : ""} à examiner` : "Aucune panne détectée"}</span>
+        <strong class="metric-value">${activeIncidents.length}</strong>
+        <span class="metric-detail">${activeIncidents.length ? `${activeIncidents.length} incident${activeIncidents.length > 1 ? "s" : ""} à examiner` : "Aucun incident actif"}</span>
       </article>
       <article class="metric-card success">
         <span class="metric-label"><i></i> Applications stables</span>
@@ -279,6 +295,8 @@ function overviewTemplate() {
         <div class="app-list-header" aria-hidden="true"><span>Application</span><span>État</span><span>Disponibilité</span><span>Latence</span><span>Dernier contrôle</span><span></span></div>
         <div id="application-rows">${applicationRows(visible)}</div>
       </div>
+      <div class="section-heading"><h2>Incidents récents</h2><span>${state.incidents.length} événement${state.incidents.length > 1 ? "s" : ""}</span></div>
+      <div class="panel incident-list">${incidentRows(state.incidents.slice(0, 8))}</div>
     </section>`;
 }
 
@@ -328,6 +346,7 @@ function monitorRows(monitors) {
       <span class="data-value"><strong>${formatPercent(monitor.uptime)}</strong></span>
       <span class="data-value"><strong>${formatLatency(monitor.average_response_time_ms)}</strong></span>
       <span class="data-value" title="${escapeHTML(formatDate(monitor.last_checked_at))}">${relativeTime(monitor.last_checked_at)}</span>
+      <button class="config-link" type="button" data-config-monitor="${escapeHTML(monitor.id)}">Alertes</button>
     </div>`).join("");
 }
 
@@ -353,6 +372,100 @@ function eventRows(events) {
       <span class="data-value">HTTP ${event.status_code || "—"}</span>
       <span class="data-value">${formatLatency(event.response_time_ms)}</span>
     </div>`).join("");
+}
+
+function incidentRows(incidents) {
+  if (!incidents.length) return '<div class="empty-row">Aucun incident enregistré.</div>';
+  return incidents.map((incident) => `
+    <div class="incident-row">
+      <span class="incident-kind ${incident.kind === "LATENCY" ? "latency" : "availability"}">${incident.kind === "LATENCY" ? "Latence" : "Disponibilité"}</span>
+      <div class="event-name"><strong>${escapeHTML(incident.summary)}</strong><small>${escapeHTML(incident.application_name)} · ${escapeHTML(incident.environment_name)} · ${escapeHTML(incident.monitor_name)}</small></div>
+      <span class="status-pill ${incident.status === "RESOLVED" ? "status-up" : incident.status === "ACKNOWLEDGED" ? "status-degraded" : "status-down"}">${incident.status === "RESOLVED" ? "Résolu" : incident.status === "ACKNOWLEDGED" ? "Acquitté" : "Ouvert"}</span>
+      <time class="event-time" datetime="${escapeHTML(incident.started_at)}" title="${escapeHTML(formatDate(incident.started_at))}">${relativeTime(incident.started_at)}</time>
+      ${incident.status === "OPEN" ? `<button class="config-link" type="button" data-ack-incident="${escapeHTML(incident.id)}">Acquitter</button>` : "<span></span>"}
+    </div>`).join("");
+}
+
+function localDateTimeInput(value) {
+  const date = value ? new Date(value) : new Date();
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+function findMonitor(monitorID) {
+  return state.detail?.environments?.flatMap((environment) => environment.monitors || []).find((monitor) => monitor.id === monitorID);
+}
+
+async function openMonitorSettings(monitorID) {
+  const monitor = findMonitor(monitorID);
+  if (!monitor) return;
+  state.settings = { monitor, loading: true, rule: null, maintenances: [] };
+  renderSettings();
+  try {
+    const [rule, maintenances] = await Promise.all([
+      api(`/monitors/${encodeURIComponent(monitorID)}/alert-rule`),
+      api(`/monitors/${encodeURIComponent(monitorID)}/maintenance-windows`),
+    ]);
+    state.settings = { monitor, loading: false, rule, maintenances };
+    renderSettings();
+  } catch (error) {
+    state.settings = null;
+    renderSettings();
+    showToast(`Configuration indisponible : ${error.message}`);
+  }
+}
+
+function closeSettings() {
+  state.settings = null;
+  renderSettings();
+}
+
+function renderSettings() {
+  const root = document.querySelector("#modal-root");
+  if (!state.settings) {
+    root.innerHTML = "";
+    return;
+  }
+  const { monitor, loading, rule, maintenances } = state.settings;
+  if (loading) {
+    root.innerHTML = '<div class="modal-backdrop"><section class="settings-modal"><div class="state-view" style="min-height:240px"><div class="state-content"><p>Chargement de la configuration…</p></div></div></section></div>';
+    return;
+  }
+  const startsAt = new Date(Date.now() + 5 * 60_000);
+  const endsAt = new Date(startsAt.getTime() + 60 * 60_000);
+  root.innerHTML = `
+    <div class="modal-backdrop" data-action="close-settings">
+      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" data-modal-panel>
+        <header class="settings-head"><div><p class="eyebrow">Configuration</p><h2 id="settings-title">${escapeHTML(monitor.name)}</h2><p>${escapeHTML(monitor.url)}</p></div><button class="modal-close" type="button" data-action="close-settings" aria-label="Fermer">×</button></header>
+        <div class="settings-body">
+          <form data-form="alert-rule" data-monitor-id="${escapeHTML(monitor.id)}">
+            <div class="form-section-title"><div><h3>Règle d’alerte</h3><p>Un webhook unique est envoyé à l’ouverture puis, si activé, au rétablissement.</p></div><label class="switch"><input name="enabled" type="checkbox" ${rule.enabled ? "checked" : ""}/><span></span><strong>Active</strong></label></div>
+            <label class="field field-wide"><span>URL du webhook</span><input name="webhook_url" type="url" value="${escapeHTML(rule.webhook_url)}" placeholder="https://hooks.example.com/go-maso" /></label>
+            <div class="form-grid">
+              <label class="field"><span>Échecs consécutifs</span><input name="failure_threshold" type="number" min="1" max="20" value="${rule.failure_threshold}" required /></label>
+              <label class="field"><span>Fenêtre d’observation (s)</span><input name="failure_window_seconds" type="number" min="30" max="86400" value="${rule.failure_window_seconds}" required /></label>
+              <label class="field"><span>Seuil de latence (ms)</span><input name="latency_threshold_ms" type="number" min="0" max="600000" value="${rule.latency_threshold_ms}" /><small>0 désactive ce signal</small></label>
+              <label class="field"><span>Mesures lentes consécutives</span><input name="latency_consecutive_checks" type="number" min="1" max="20" value="${rule.latency_consecutive_checks}" required /></label>
+              <label class="field"><span>Cooldown (s)</span><input name="cooldown_seconds" type="number" min="0" max="86400" value="${rule.cooldown_seconds}" required /></label>
+              <label class="check-field"><input name="notify_recovery" type="checkbox" ${rule.notify_recovery ? "checked" : ""}/><span>Notifier le rétablissement</span></label>
+            </div>
+            <div class="form-actions"><button class="button" type="submit">Enregistrer la règle</button></div>
+          </form>
+          <div class="settings-divider"></div>
+          <form data-form="maintenance" data-monitor-id="${escapeHTML(monitor.id)}">
+            <div class="form-section-title"><div><h3>Fenêtre de maintenance</h3><p>Les nouveaux incidents et notifications sont suspendus pendant la période.</p></div></div>
+            <div class="form-grid maintenance-grid">
+              <label class="field field-wide"><span>Motif</span><input name="reason" maxlength="240" placeholder="Déploiement planifié" required /></label>
+              <label class="field"><span>Début · ${escapeHTML(timezone)}</span><input name="starts_at" type="datetime-local" value="${localDateTimeInput(startsAt)}" required /></label>
+              <label class="field"><span>Fin · ${escapeHTML(timezone)}</span><input name="ends_at" type="datetime-local" value="${localDateTimeInput(endsAt)}" required /></label>
+            </div>
+            <div class="form-actions"><button class="secondary-button" type="submit">Planifier</button></div>
+          </form>
+          <div class="maintenance-list">
+            ${maintenances.length ? maintenances.map((window) => `<div class="maintenance-item"><div><strong>${escapeHTML(window.reason)}</strong><small>${formatDate(window.starts_at)} → ${formatDate(window.ends_at)}</small></div><button class="config-link" type="button" data-cancel-maintenance="${escapeHTML(window.id)}">Annuler</button></div>`).join("") : '<p class="muted-copy">Aucune maintenance planifiée.</p>'}
+          </div>
+        </div>
+      </section>
+    </div>`;
 }
 
 function detailTemplate() {
@@ -391,6 +504,9 @@ function detailTemplate() {
         </article>
       </div>
 
+      <div class="section-heading"><h2>Incidents</h2><span>${state.incidents.filter((item) => item.status !== "RESOLVED").length} actif${state.incidents.filter((item) => item.status !== "RESOLVED").length > 1 ? "s" : ""}</span></div>
+      <div class="panel incident-list">${incidentRows(state.incidents)}</div>
+
       <div class="section-heading"><h2>Environnements & moniteurs</h2><span>${detail.environments?.length || 0} environnement${detail.environments?.length > 1 ? "s" : ""}</span></div>
       ${environmentCards(detail.environments || [])}
 
@@ -420,6 +536,17 @@ document.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action === "refresh" || action === "retry") refreshCurrent();
   if (action === "home") window.location.hash = "#/";
+  if (action === "close-settings" && !event.target.closest("[data-modal-panel]")) closeSettings();
+  if (event.target.closest('.modal-close[data-action="close-settings"]')) closeSettings();
+
+  const monitorID = event.target.closest("[data-config-monitor]")?.dataset.configMonitor;
+  if (monitorID) openMonitorSettings(monitorID);
+
+  const incidentID = event.target.closest("[data-ack-incident]")?.dataset.ackIncident;
+  if (incidentID) acknowledgeIncident(incidentID);
+
+  const maintenanceID = event.target.closest("[data-cancel-maintenance]")?.dataset.cancelMaintenance;
+  if (maintenanceID) cancelMaintenance(maintenanceID);
 
   const status = event.target.closest("[data-status]")?.dataset.status;
   if (status) {
@@ -434,6 +561,75 @@ document.addEventListener("click", (event) => {
     if (current.name === "detail") loadDetail(current.id);
   }
 });
+
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-form]");
+  if (!form) return;
+  event.preventDefault();
+  const submit = form.querySelector('[type="submit"]');
+  submit.disabled = true;
+  try {
+    const data = new FormData(form);
+    const monitorID = form.dataset.monitorId;
+    if (form.dataset.form === "alert-rule") {
+      const payload = {
+        enabled: data.has("enabled"),
+        webhook_url: String(data.get("webhook_url") || ""),
+        failure_threshold: Number(data.get("failure_threshold")),
+        failure_window_seconds: Number(data.get("failure_window_seconds")),
+        latency_threshold_ms: Number(data.get("latency_threshold_ms")),
+        latency_consecutive_checks: Number(data.get("latency_consecutive_checks")),
+        cooldown_seconds: Number(data.get("cooldown_seconds")),
+        notify_recovery: data.has("notify_recovery"),
+      };
+      const rule = await api(`/monitors/${encodeURIComponent(monitorID)}/alert-rule`, { method: "PUT", body: JSON.stringify(payload) });
+      state.settings.rule = rule;
+      showToast("Règle d’alerte enregistrée.");
+    } else {
+      await api(`/monitors/${encodeURIComponent(monitorID)}/maintenance-windows`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: String(data.get("reason")),
+          starts_at: new Date(String(data.get("starts_at"))).toISOString(),
+          ends_at: new Date(String(data.get("ends_at"))).toISOString(),
+        }),
+      });
+      state.settings.maintenances = await api(`/monitors/${encodeURIComponent(monitorID)}/maintenance-windows`);
+      showToast("Maintenance planifiée.");
+    }
+    renderSettings();
+  } catch (error) {
+    showToast(error.message);
+    submit.disabled = false;
+  }
+});
+
+async function acknowledgeIncident(incidentID) {
+  const acknowledgedBy = window.prompt("Nom de la personne qui acquitte l’incident :", "Opérateur");
+  if (!acknowledgedBy?.trim()) return;
+  try {
+    await api(`/incidents/${encodeURIComponent(incidentID)}/acknowledge`, {
+      method: "POST",
+      body: JSON.stringify({ acknowledged_by: acknowledgedBy.trim() }),
+    });
+    await refreshCurrent({ silent: true });
+    showToast("Incident acquitté.");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function cancelMaintenance(maintenanceID) {
+  try {
+    await api(`/maintenance-windows/${encodeURIComponent(maintenanceID)}`, { method: "DELETE" });
+    const monitorID = state.settings.monitor.id;
+    state.settings.maintenances = await api(`/monitors/${encodeURIComponent(monitorID)}/maintenance-windows`);
+    renderSettings();
+    showToast("Maintenance annulée.");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
 
 document.addEventListener("input", (event) => {
   if (event.target.matches('[data-control="search"]')) {
