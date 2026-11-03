@@ -177,7 +177,7 @@ Des travaux précédents ont déjà porté sur le **bootstrap Go**, une **API la
 
 ### Phase 5 — Incidents, alertes et notifications **(MVP complet)**
 
-**Statut :** `À faire`  
+**Statut :** `Terminé` — cycle incident, webhook et rétablissement validé le 3 novembre 2026
 **Objectif :** être averti sans surveiller constamment le tableau de bord.
 
 **Travaux :**
@@ -361,8 +361,8 @@ Après audit du dépôt, dérouler de préférence les éléments suivants :
 - [x] Persister un `CheckResult` (heure, code, durée, erreur).
 - [x] Ajouter un scheduler qui déclenche automatiquement les checks.
 - [x] Exposer la dernière mesure et l'état calculé via l'API.
-- [ ] Afficher ces données dans une première vue de dashboard.
-- [ ] Déclencher une alerte simple en cas de panne confirmée.
+- [x] Afficher ces données dans une première vue de dashboard.
+- [x] Déclencher une alerte simple en cas de panne confirmée.
 
 **Premier scénario de démonstration :** enregistrer une API NestJS et un site Next.js ; couper volontairement l'un des services ; voir la transition d'état dans Go-Maso ; recevoir une alerte ; redémarrer le service ; constater la récupération et l'historique.
 

@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Maso API
-  version: 0.1.0
-  description: API contract for the Go-Maso MVP monitoring catalog and HTTP checks.
+  version: 0.2.0
+  description: API contract for the Go-Maso MVP monitoring, incident, and webhook alerting platform.
 servers:
   - url: http://localhost:8080
 
@@ -308,6 +308,158 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /monitors/{id}/alert-rule:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: Get the monitor alert rule or its defaults
+      responses:
+        "200":
+          description: Alert rule configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertRule" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Create or replace the monitor alert rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlertRuleInput" }
+      responses:
+        "200":
+          description: Saved alert rule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertRule" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /monitors/{id}/maintenance-windows:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: List current and upcoming monitor maintenance windows
+      responses:
+        "200":
+          description: Maintenance windows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MaintenanceWindow" }
+    post:
+      summary: Schedule a monitor maintenance window
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MaintenanceInput" }
+      responses:
+        "201":
+          description: Scheduled maintenance window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MaintenanceWindow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /maintenance-windows/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      summary: Cancel a maintenance window
+      responses:
+        "204": { description: Maintenance window cancelled. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /incidents:
+    get:
+      summary: List incidents
+      parameters:
+        - name: application_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: monitor_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/IncidentStatus" }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Incidents ordered by active state and start time.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Incident" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /incidents/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: Get an incident
+      responses:
+        "200":
+          description: Incident details.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Incident" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /incidents/{id}/acknowledge:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      summary: Acknowledge an active incident
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AcknowledgementInput" }
+      responses:
+        "200":
+          description: Acknowledged incident.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Incident" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The incident is already resolved. }
+
+  /incidents/{id}/events:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: List the incident audit trail
+      responses:
+        "200":
+          description: Incident events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/IncidentEvent" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /incidents/{id}/deliveries:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      summary: List notification delivery attempts for an incident
+      responses:
+        "200":
+          description: Notification deliveries without destination secrets or payloads.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/NotificationDelivery" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /dashboard:
     get:
       summary: List application-level monitoring aggregates
@@ -537,6 +689,104 @@ components:
         total_checks_24h: { type: integer, format: int64 }
         up_checks_24h: { type: integer, format: int64 }
         down_checks_24h: { type: integer, format: int64 }
+    AlertRuleInput:
+      type: object
+      additionalProperties: false
+      required: [enabled, webhook_url, failure_threshold, failure_window_seconds, latency_threshold_ms, latency_consecutive_checks, cooldown_seconds, notify_recovery]
+      properties:
+        enabled: { type: boolean }
+        webhook_url: { type: string, format: uri, description: Public HTTP(S) webhook destination. }
+        failure_threshold: { type: integer, minimum: 1, maximum: 20 }
+        failure_window_seconds: { type: integer, minimum: 30, maximum: 86400 }
+        latency_threshold_ms: { type: integer, format: int64, minimum: 0, maximum: 600000, description: Zero disables latency incidents. }
+        latency_consecutive_checks: { type: integer, minimum: 1, maximum: 20 }
+        cooldown_seconds: { type: integer, minimum: 0, maximum: 86400 }
+        notify_recovery: { type: boolean }
+    AlertRule:
+      allOf:
+        - $ref: "#/components/schemas/AlertRuleInput"
+        - type: object
+          required: [monitor_id]
+          properties:
+            id: { type: string, format: uuid }
+            monitor_id: { type: string, format: uuid }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    IncidentStatus:
+      type: string
+      enum: [OPEN, ACKNOWLEDGED, RESOLVED]
+    Incident:
+      type: object
+      required: [id, monitor_id, monitor_name, environment_name, application_id, application_name, kind, status, summary, started_at, last_observation_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        monitor_id: { type: string, format: uuid }
+        monitor_name: { type: string }
+        environment_name: { type: string }
+        application_id: { type: string, format: uuid }
+        application_name: { type: string }
+        kind: { type: string, enum: [AVAILABILITY, LATENCY] }
+        status: { $ref: "#/components/schemas/IncidentStatus" }
+        summary: { type: string }
+        trigger_check_result_id: { type: string, format: uuid }
+        started_at: { type: string, format: date-time }
+        last_observation_at: { type: string, format: date-time }
+        acknowledged_at: { type: string, format: date-time }
+        acknowledged_by: { type: string }
+        resolved_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AcknowledgementInput:
+      type: object
+      additionalProperties: false
+      required: [acknowledged_by]
+      properties:
+        acknowledged_by: { type: string, minLength: 1, maxLength: 120 }
+    IncidentEvent:
+      type: object
+      required: [id, incident_id, event_type, message, metadata, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        incident_id: { type: string, format: uuid }
+        event_type: { type: string, enum: [OPENED, ACKNOWLEDGED, RESOLVED, NOTIFICATION_QUEUED, NOTIFICATION_DELIVERED, NOTIFICATION_FAILED] }
+        message: { type: string }
+        metadata: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+    NotificationDelivery:
+      type: object
+      required: [id, incident_id, event_type, channel, status, attempts, max_attempts, next_attempt_at, response_status, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        incident_id: { type: string, format: uuid }
+        event_type: { type: string, enum: [INCIDENT_OPENED, INCIDENT_RESOLVED] }
+        channel: { type: string, enum: [WEBHOOK] }
+        status: { type: string, enum: [PENDING, SENDING, DELIVERED, FAILED] }
+        attempts: { type: integer }
+        max_attempts: { type: integer }
+        next_attempt_at: { type: string, format: date-time }
+        response_status: { type: integer }
+        last_error: { type: string }
+        delivered_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    MaintenanceInput:
+      type: object
+      additionalProperties: false
+      required: [reason, starts_at, ends_at]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 240 }
+        starts_at: { type: string, format: date-time }
+        ends_at: { type: string, format: date-time }
+    MaintenanceWindow:
+      allOf:
+        - $ref: "#/components/schemas/MaintenanceInput"
+        - type: object
+          required: [id, monitor_id, created_at]
+          properties:
+            id: { type: string, format: uuid }
+            monitor_id: { type: string, format: uuid }
+            cancelled_at: { type: string, format: date-time }
+            created_at: { type: string, format: date-time }
     ApplicationOverview:
       type: object
       required: [id, name, owner, status, monitors, last_status_code, last_response_time_ms, uptime_24h, average_response_time_ms, total_checks_24h, up_checks_24h, down_checks_24h]

@@ -93,8 +93,22 @@ See `.env.example` for local values. The application does not automatically load
 - `GET /monitors/{id}/monitoring-summary`
 - `GET /dashboard`
 - `GET /dashboard/applications/{id}?period_hours=24`
+- `GET|PUT /monitors/{id}/alert-rule`
+- `GET /incidents`
+- `GET /incidents/{id}`
+- `POST /incidents/{id}/acknowledge`
+- `GET /incidents/{id}/events`
+- `GET /incidents/{id}/deliveries`
+- `POST|GET /monitors/{id}/maintenance-windows`
+- `DELETE /maintenance-windows/{id}`
 
 The complete request and response contract is in `docs/openapi.yaml`.
+
+## Alerting
+
+Alert rules are configured per monitor from the dashboard. The MVP notification channel is a generic public HTTP(S) webhook. Go-Maso validates and re-resolves webhook destinations using the same SSRF protections as monitor targets, sends an idempotency key, retries failed deliveries with bounded backoff, and can send a recovery notification when the incident closes.
+
+Failure thresholds, observation windows, excessive-latency thresholds, cooldown, acknowledgement, delivery history, and planned maintenance windows are persisted in PostgreSQL. Active maintenance suppresses new incidents and notifications for the selected monitor.
 
 ## Operations
 

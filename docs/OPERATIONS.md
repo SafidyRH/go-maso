@@ -34,6 +34,7 @@ Validate the restored schema and representative records, then remove the disposa
 4. Run `go run ./cmd/migrate status`, then `go run ./cmd/migrate up` from `apps/api`.
 5. Start the API and check `/healthz` and `/readyz`.
 6. Validate application listing, a manual check, monitoring history, and dashboard aggregates.
+7. Confirm pending webhook deliveries resume and review failed attempts from the incident history.
 
 ## Rollback
 
@@ -48,3 +49,11 @@ After an unexpected restart:
 - enabled monitors resume checks;
 - new results appear in history;
 - previously stored history remains available.
+- interrupted webhook deliveries return to the retry queue;
+- open incidents and planned maintenance windows remain visible in the dashboard.
+
+## Webhook delivery failures
+
+Go-Maso retries failed webhook deliveries up to five times with increasing delays. Use `GET /incidents/{id}/deliveries` to inspect attempts, HTTP response codes, and the last error. Destination URLs and payloads are deliberately omitted from this response.
+
+Before changing a failed destination, verify its DNS records and TLS configuration. Webhooks resolving to private, loopback, link-local, documentation, or otherwise prohibited networks are rejected. Saving a corrected alert rule affects future incident notifications; existing queued deliveries retain their original destination for auditability.
