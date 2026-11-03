@@ -53,7 +53,18 @@ func TestUpAgainstPostgres(t *testing.T) {
 		t.Fatalf("apply migrations: %v", err)
 	}
 
-	for _, table := range []string{"applications", "environments", "monitors", "check_results", "schema_migrations"} {
+	for _, table := range []string{
+		"applications",
+		"environments",
+		"monitors",
+		"check_results",
+		"alert_rules",
+		"maintenance_windows",
+		"incidents",
+		"incident_events",
+		"notification_deliveries",
+		"schema_migrations",
+	} {
 		var exists bool
 		if err := pool.QueryRow(ctx, "SELECT to_regclass('public.' || $1) IS NOT NULL", table).Scan(&exists); err != nil {
 			t.Fatalf("check table %s: %v", table, err)
@@ -67,8 +78,8 @@ func TestUpAgainstPostgres(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&versions); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if versions != 3 {
-		t.Fatalf("applied migration count = %d, want 3", versions)
+	if versions != 4 {
+		t.Fatalf("applied migration count = %d, want 4", versions)
 	}
 }
 
