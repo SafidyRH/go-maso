@@ -105,10 +105,16 @@ func main() {
 		scheduler,
 		networkPolicy,
 	)
+	incidentHandler := incident.NewHandler(
+		incidentRepository,
+		monitorRepository,
+		networkPolicy,
+	)
 
 	applicationHandler.RegisterRoutes(mux)
 	environmentHandler.RegisterRoutes(mux)
 	monitorHandler.RegisterRoutes(mux)
+	incidentHandler.RegisterRoutes(mux)
 
 	monitoringHandler := monitoring.NewHandler(
 		monitoringService,
