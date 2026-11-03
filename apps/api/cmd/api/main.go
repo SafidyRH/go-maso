@@ -67,6 +67,10 @@ func main() {
 
 	networkPolicy := monitoring.NewNetworkPolicy()
 	checker := monitoring.NewChecker(networkPolicy)
+	notificationSender := incident.NewWebhookSender(
+		monitoring.NewSafeHTTPClient(networkPolicy, 10*time.Second),
+	)
+	notificationDispatcher := incident.NewDispatcher(incidentRepository, notificationSender)
 
 	dashboardHandler := dashboard.NewHandler(
 		dashboardRepository,
@@ -184,6 +188,7 @@ func main() {
 
 		os.Exit(1)
 	}
+	notificationDispatcher.Start(ctx)
 
 	go func() {
 		slog.Info(
@@ -224,6 +229,7 @@ func main() {
 	}
 
 	scheduler.Wait()
+	notificationDispatcher.Wait()
 
 	slog.Info("Go-Maso stopped")
 
