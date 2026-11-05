@@ -21,13 +21,17 @@ type deliveryStore interface {
 
 type WebhookSender struct {
 	client *http.Client
+	now    func() time.Time
 }
 
 func NewWebhookSender(client *http.Client) *WebhookSender {
-	return &WebhookSender{client: client}
+	return &WebhookSender{client: client, now: time.Now}
 }
 
 func (s *WebhookSender) Send(ctx context.Context, delivery PendingDelivery) (int, error) {
+	if delivery.SigningSecret == "" {
+		return 0, errors.New("webhook signing secret is missing")
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, delivery.WebhookURL, bytes.NewReader(delivery.Payload))
 	if err != nil {
 		return 0, fmt.Errorf("create webhook request: %w", err)
@@ -36,6 +40,9 @@ func (s *WebhookSender) Send(ctx context.Context, delivery PendingDelivery) (int
 	request.Header.Set("User-Agent", "Go-Maso-Notifications/1.0")
 	request.Header.Set("X-Go-Maso-Event", delivery.EventType)
 	request.Header.Set("Idempotency-Key", delivery.IdempotencyKey)
+	timestamp := webhookTimestamp(s.now().UTC().Unix())
+	request.Header.Set("X-Go-Maso-Timestamp", timestamp)
+	request.Header.Set("X-Go-Maso-Signature", webhookSignature(delivery.SigningSecret, timestamp, delivery.Payload))
 
 	response, err := s.client.Do(request)
 	if err != nil {

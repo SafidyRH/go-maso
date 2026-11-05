@@ -35,6 +35,9 @@ func TestIncidentLifecycleAndUniqueWebhookAgainstPostgres(t *testing.T) {
 		if r.Header.Get("Idempotency-Key") == "" {
 			t.Error("webhook request has no idempotency key")
 		}
+		if r.Header.Get("X-Go-Maso-Timestamp") == "" || r.Header.Get("X-Go-Maso-Signature") == "" {
+			t.Error("webhook request has no signature headers")
+		}
 		deliveries.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	}))

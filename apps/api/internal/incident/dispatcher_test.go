@@ -2,6 +2,7 @@ package incident
 
 import (
 	"context"
+	"crypto/hmac"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -35,10 +36,12 @@ func (s *fakeDeliveryStore) MarkDeliveryFailed(_ context.Context, _ PendingDeliv
 func TestDispatcherDeliversWebhookWithIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
-	var gotEvent, gotKey string
+	var gotEvent, gotKey, gotTimestamp, gotSignature string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotEvent = r.Header.Get("X-Go-Maso-Event")
 		gotKey = r.Header.Get("Idempotency-Key")
+		gotTimestamp = r.Header.Get("X-Go-Maso-Timestamp")
+		gotSignature = r.Header.Get("X-Go-Maso-Signature")
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
@@ -47,10 +50,12 @@ func TestDispatcherDeliversWebhookWithIdempotencyKey(t *testing.T) {
 		ID:             "delivery-id",
 		EventType:      "INCIDENT_OPENED",
 		WebhookURL:     server.URL,
+		SigningSecret:  "test-signing-secret",
 		Payload:        []byte(`{"event":"INCIDENT_OPENED"}`),
 		IdempotencyKey: "incident-id:INCIDENT_OPENED",
 	}}
 	dispatcher := NewDispatcher(store, NewWebhookSender(server.Client()))
+	dispatcher.sender.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	if err := dispatcher.deliverOne(context.Background()); err != nil {
 		t.Fatalf("deliverOne() error = %v", err)
 	}
@@ -59,6 +64,13 @@ func TestDispatcherDeliversWebhookWithIdempotencyKey(t *testing.T) {
 	}
 	if gotEvent != "INCIDENT_OPENED" || gotKey != "incident-id:INCIDENT_OPENED" {
 		t.Fatalf("webhook headers event=%q key=%q", gotEvent, gotKey)
+	}
+	if gotTimestamp != "1700000000" {
+		t.Fatalf("webhook timestamp = %q", gotTimestamp)
+	}
+	wantSignature := webhookSignature("test-signing-secret", gotTimestamp, store.delivery.Payload)
+	if !hmac.Equal([]byte(gotSignature), []byte(wantSignature)) {
+		t.Fatalf("webhook signature = %q, want %q", gotSignature, wantSignature)
 	}
 }
 
@@ -71,10 +83,11 @@ func TestDispatcherSchedulesRetryAfterWebhookFailure(t *testing.T) {
 	defer server.Close()
 
 	store := &fakeDeliveryStore{delivery: PendingDelivery{
-		WebhookURL:  server.URL,
-		Payload:     []byte(`{}`),
-		Attempts:    1,
-		MaxAttempts: 5,
+		WebhookURL:    server.URL,
+		SigningSecret: "test-signing-secret",
+		Payload:       []byte(`{}`),
+		Attempts:      1,
+		MaxAttempts:   5,
 	}}
 	dispatcher := NewDispatcher(store, NewWebhookSender(server.Client()))
 	if err := dispatcher.deliverOne(context.Background()); err != nil {

@@ -14,6 +14,7 @@ type PendingDelivery struct {
 	IncidentID     string
 	EventType      string
 	WebhookURL     string
+	SigningSecret  string
 	Payload        []byte
 	Attempts       int
 	MaxAttempts    int
@@ -40,6 +41,7 @@ func (r *Repository) RecoverInterruptedDeliveries(ctx context.Context) error {
 func (r *Repository) ClaimPendingDelivery(ctx context.Context) (PendingDelivery, error) {
 	var value PendingDelivery
 	var encryptedURL []byte
+	var encryptedSigningSecret []byte
 	err := r.db.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id
@@ -56,13 +58,15 @@ func (r *Repository) ClaimPendingDelivery(ctx context.Context) (PendingDelivery,
 		FROM candidate
 		WHERE d.id = candidate.id
 		RETURNING d.id::text, d.incident_id::text, d.event_type, d.webhook_url,
-		          d.webhook_url_encrypted, d.payload, d.attempts, d.max_attempts, d.idempotency_key
+		          d.webhook_url_encrypted, d.signing_secret_encrypted, d.payload,
+		          d.attempts, d.max_attempts, d.idempotency_key
 	`).Scan(
 		&value.ID,
 		&value.IncidentID,
 		&value.EventType,
 		&value.WebhookURL,
 		&encryptedURL,
+		&encryptedSigningSecret,
 		&value.Payload,
 		&value.Attempts,
 		&value.MaxAttempts,
@@ -79,6 +83,13 @@ func (r *Repository) ClaimPendingDelivery(ctx context.Context) (PendingDelivery,
 		if err != nil {
 			return PendingDelivery{}, fmt.Errorf("decrypt delivery webhook: %w", err)
 		}
+	}
+	if len(encryptedSigningSecret) == 0 {
+		return PendingDelivery{}, errors.New("notification delivery has no signing secret")
+	}
+	value.SigningSecret, err = r.vault.DecryptString(encryptedSigningSecret, "delivery-signing")
+	if err != nil {
+		return PendingDelivery{}, fmt.Errorf("decrypt delivery signing secret: %w", err)
 	}
 	return value, nil
 }
