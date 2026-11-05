@@ -8,27 +8,23 @@ Go-Maso is a lightweight monitoring platform. The current implementation contain
 - Docker Desktop with Docker Compose
 - PowerShell for the Windows commands below
 
-## Start the development environment on Windows
+## Start the complete MVP with Docker
 
 From the repository root:
 
 ```powershell
-docker compose up -d postgres
-
-$env:DATABASE_URL = 'postgres://gomaso:gomaso@localhost:5434/go_maso?sslmode=disable'
-$env:HTTP_ADDRESS = ':8080'
-
-Set-Location apps/api
-go run ./cmd/migrate up
-go run ./cmd/api
+./scripts/init-secrets.ps1
+docker compose up -d --build
 ```
 
-If port `5434` is already in use, choose another host port before starting Compose and use the same port in `DATABASE_URL`:
+The script creates four ignored secret files without overwriting existing values. Read `secrets/admin_password.txt` for the initial login, then open `http://localhost:8080`. The container applies database migrations before starting the API.
+
+If a host port is already in use, select another one before starting Compose:
 
 ```powershell
 $env:POSTGRES_PORT = '5435'
-$env:DATABASE_URL = 'postgres://gomaso:gomaso@localhost:5435/go_maso?sslmode=disable'
-docker compose up -d postgres
+$env:API_PORT = '8081'
+docker compose up -d --build
 ```
 
 In another terminal, verify liveness and database readiness:
@@ -69,11 +65,18 @@ The CI pipeline performs formatting, vet, PostgreSQL migration integration tests
 
 | Variable | Required | Default | Description |
 |---|---:|---|---|
-| `DATABASE_URL` | yes | — | PostgreSQL connection URL |
+| `DATABASE_URL` or `DATABASE_URL_FILE` | yes | — | PostgreSQL connection URL or path to its secret file |
 | `HTTP_ADDRESS` | no | `:8080` | API listen address |
 | `SHUTDOWN_TIMEOUT` | no | `10s` | Graceful HTTP shutdown deadline |
 | `MONITOR_WORKERS` | no | `10` | Maximum number of checks running concurrently |
 | `RESULT_RETENTION_DAYS` | no | `30` | Number of days to retain raw check results |
+| `ADMIN_EMAIL` | no | `admin@gomaso.local` | Bootstrap administrator email |
+| `ADMIN_PASSWORD` or `ADMIN_PASSWORD_FILE` | first start | — | Bootstrap administrator password; minimum 12 characters |
+| `SECRETS_ENCRYPTION_KEY` or `SECRETS_ENCRYPTION_KEY_FILE` | yes | — | Standard Base64 encoding of exactly 32 random bytes |
+| `SESSION_SECURE_COOKIE` | production | `false` | Must be `true` behind HTTPS to use `Secure` `__Host-` cookies |
+| `SESSION_IDLE_TIMEOUT` | no | `30m` | Session idle expiration |
+| `SESSION_ABSOLUTE_TIMEOUT` | no | `12h` | Session absolute expiration |
+| `TRUST_PROXY_HEADERS` | no | `false` | Trust the first `X-Forwarded-For` address only behind a controlled proxy |
 
 See `.env.example` for local values. The application does not automatically load `.env`; export the variables in the shell or inject them through the process manager.
 
@@ -81,6 +84,9 @@ See `.env.example` for local values. The application does not automatically load
 
 - `GET /healthz`
 - `GET /readyz`
+- `POST /auth/login`
+- `GET /auth/me`
+- `POST /auth/logout`
 - `POST /applications`
 - `GET /applications`
 - `GET|PATCH|DELETE /applications/{id}`
@@ -94,6 +100,7 @@ See `.env.example` for local values. The application does not automatically load
 - `GET /dashboard`
 - `GET /dashboard/applications/{id}?period_hours=24`
 - `GET|PUT /monitors/{id}/alert-rule`
+- `POST /monitors/{id}/alert-rule/signing-secret/rotate`
 - `GET /incidents`
 - `GET /incidents/{id}`
 - `POST /incidents/{id}/acknowledge`
@@ -107,6 +114,8 @@ The complete request and response contract is in `docs/openapi.yaml`.
 ## Alerting
 
 Alert rules are configured per monitor from the dashboard. The MVP notification channel is a generic public HTTP(S) webhook. Go-Maso validates and re-resolves webhook destinations using the same SSRF protections as monitor targets, sends an idempotency key, retries failed deliveries with bounded backoff, and can send a recovery notification when the incident closes.
+
+Webhook destinations and HMAC keys are encrypted with AES-256-GCM before storage. The key is revealed only when a rule is created or explicitly rotated. Each request carries `X-Go-Maso-Timestamp` and `X-Go-Maso-Signature`; verification is documented in `docs/OPERATIONS.md`.
 
 Failure thresholds, observation windows, excessive-latency thresholds, cooldown, acknowledgement, delivery history, and planned maintenance windows are persisted in PostgreSQL. Active maintenance suppresses new incidents and notifications for the selected monitor.
 
