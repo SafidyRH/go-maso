@@ -1,26 +1,70 @@
 openapi: 3.1.0
 info:
   title: Go-Maso API
-  version: 0.2.0
-  description: API contract for the Go-Maso MVP monitoring, incident, and webhook alerting platform.
+  version: 0.3.0
+  description: |
+    API contract for the Go-Maso MVP monitoring, incident, and webhook alerting platform.
+    Except for health checks and login, operations require a server-side session cookie.
+    Every authenticated non-safe request also requires X-CSRF-Token copied from the CSRF cookie.
 servers:
   - url: http://localhost:8080
+security:
+  - sessionCookie: []
 
 paths:
   /healthz:
     get:
+      security: []
       summary: Check API liveness
       responses:
         "200":
           description: The API process is alive.
   /readyz:
     get:
+      security: []
       summary: Check API and database readiness
       responses:
         "200":
           description: The API and PostgreSQL are ready.
         "503":
           description: PostgreSQL is unavailable.
+
+  /auth/login:
+    post:
+      security: []
+      summary: Create an administrator session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginInput" }
+      responses:
+        "200":
+          description: Authenticated administrator. The response sets the HttpOnly session cookie and the CSRF cookie.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { description: Invalid credentials. }
+        "429": { description: Too many failed login attempts. }
+
+  /auth/me:
+    get:
+      summary: Return the authenticated administrator
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { description: Authentication required or session expired. }
+
+  /auth/logout:
+    post:
+      summary: Revoke the current session
+      description: Requires the X-CSRF-Token header copied from the go_maso_csrf (or __Host-go_maso_csrf) cookie.
+      responses:
+        "204": { description: Session revoked and cookies expired. }
+        "403": { description: Invalid CSRF token. }
 
   /applications:
     get:
@@ -336,6 +380,20 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /monitors/{id}/alert-rule/signing-secret/rotate:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      summary: Rotate and reveal the webhook HMAC key once
+      description: Requires a valid CSRF token. Queued deliveries retain the key active when they were created.
+      responses:
+        "200":
+          description: New signing key. Store it immediately because later reads never expose it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SigningSecretRotation" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /monitors/{id}/maintenance-windows:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -498,6 +556,12 @@ paths:
           $ref: "#/components/responses/NotFound"
 
 components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: go_maso_session
+      description: Server-side session cookie. HTTPS deployments use the __Host-go_maso_session name.
   parameters:
     ID:
       name: id
@@ -543,6 +607,25 @@ components:
       properties:
         error:
           type: string
+
+    LoginInput:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, format: password, maxLength: 128 }
+    User:
+      type: object
+      required: [id, email, role, disabled, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        role: { type: string, enum: [ADMIN] }
+        disabled: { type: boolean }
+        last_login_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     Application:
       type: object
@@ -703,15 +786,29 @@ components:
         cooldown_seconds: { type: integer, minimum: 0, maximum: 86400 }
         notify_recovery: { type: boolean }
     AlertRule:
-      allOf:
-        - $ref: "#/components/schemas/AlertRuleInput"
-        - type: object
-          required: [monitor_id]
-          properties:
-            id: { type: string, format: uuid }
-            monitor_id: { type: string, format: uuid }
-            created_at: { type: string, format: date-time }
-            updated_at: { type: string, format: date-time }
+      type: object
+      required: [monitor_id, enabled, webhook_configured, signing_secret_configured, failure_threshold, failure_window_seconds, latency_threshold_ms, latency_consecutive_checks, cooldown_seconds, notify_recovery]
+      properties:
+        id: { type: string, format: uuid }
+        monitor_id: { type: string, format: uuid }
+        enabled: { type: boolean }
+        webhook_configured: { type: boolean }
+        signing_secret_configured: { type: boolean }
+        signing_secret: { type: string, description: One-time reveal returned only when a rule is first created. }
+        failure_threshold: { type: integer, minimum: 1, maximum: 20 }
+        failure_window_seconds: { type: integer, minimum: 30, maximum: 86400 }
+        latency_threshold_ms: { type: integer, format: int64, minimum: 0, maximum: 600000 }
+        latency_consecutive_checks: { type: integer, minimum: 1, maximum: 20 }
+        cooldown_seconds: { type: integer, minimum: 0, maximum: 86400 }
+        notify_recovery: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SigningSecretRotation:
+      type: object
+      required: [signing_secret, rotated_at]
+      properties:
+        signing_secret: { type: string, description: One-time webhook HMAC key reveal. }
+        rotated_at: { type: string, format: date-time }
     IncidentStatus:
       type: string
       enum: [OPEN, ACKNOWLEDGED, RESOLVED]
