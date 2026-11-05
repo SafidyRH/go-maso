@@ -25,6 +25,10 @@ tmp/
 temp/
 .cache/
 
+# Runtime secrets (only templates are versioned)
+secrets/*
+!secrets/*.example
+
 # Editors and operating systems
 .idea/
 .vscode/

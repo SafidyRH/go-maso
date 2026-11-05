@@ -6,16 +6,22 @@ services:
     restart: unless-stopped
 
     environment:
-      DATABASE_URL: postgres://gomaso:${POSTGRES_PASSWORD:-gomaso}@postgres:5432/go_maso?sslmode=disable
+      DATABASE_URL_FILE: /run/secrets/database_url
       HTTP_ADDRESS: :8080
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@gomaso.local}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set}
+      ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      SECRETS_ENCRYPTION_KEY_FILE: /run/secrets/encryption_key
       SESSION_SECURE_COOKIE: ${SESSION_SECURE_COOKIE:-false}
       SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-30m}
       SESSION_ABSOLUTE_TIMEOUT: ${SESSION_ABSOLUTE_TIMEOUT:-12h}
       TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
       MONITOR_WORKERS: ${MONITOR_WORKERS:-10}
       RESULT_RETENTION_DAYS: ${RESULT_RETENTION_DAYS:-30}
+
+    secrets:
+      - database_url
+      - admin_password
+      - encryption_key
 
     ports:
       - "${API_PORT:-8080}:8080"
@@ -46,8 +52,11 @@ services:
 
     environment:
       POSTGRES_USER: gomaso
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gomaso}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: go_maso
+
+    secrets:
+      - postgres_password
 
     ports:
       - "${POSTGRES_PORT:-5434}:5432"
@@ -63,3 +72,13 @@ services:
 
 volumes:
   postgres_data:
+
+secrets:
+  postgres_password:
+    file: ${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password.txt}
+  database_url:
+    file: ${DATABASE_URL_FILE:-./secrets/database_url.txt}
+  admin_password:
+    file: ${ADMIN_PASSWORD_FILE:-./secrets/admin_password.txt}
+  encryption_key:
+    file: ${SECRETS_ENCRYPTION_KEY_FILE:-./secrets/encryption_key.txt}
