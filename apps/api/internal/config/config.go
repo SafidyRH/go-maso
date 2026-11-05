@@ -5,29 +5,40 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	DatabaseURL     string
-	HTTPAddress     string
-	ShutdownTimeout time.Duration
-	MonitorWorkers  int
-	RetentionDays   int
-	AdminEmail      string
-	AdminPassword   string
-	SessionSecure   bool
-	SessionIdle     time.Duration
-	SessionAbsolute time.Duration
-	TrustProxy      bool
+	DatabaseURL          string
+	HTTPAddress          string
+	ShutdownTimeout      time.Duration
+	MonitorWorkers       int
+	RetentionDays        int
+	AdminEmail           string
+	AdminPassword        string
+	SessionSecure        bool
+	SessionIdle          time.Duration
+	SessionAbsolute      time.Duration
+	TrustProxy           bool
+	SecretsEncryptionKey string
 }
 
 func Load() (Config, error) {
-	return load(os.Getenv)
+	return loadWith(os.Getenv, os.ReadFile)
 }
 
 func load(getenv func(string) string) (Config, error) {
-	databaseURL := getenv("DATABASE_URL")
+	return loadWith(getenv, func(string) ([]byte, error) {
+		return nil, errors.New("file secrets are unavailable in this test")
+	})
+}
+
+func loadWith(getenv func(string) string, readFile func(string) ([]byte, error)) (Config, error) {
+	databaseURL, err := secretValue(getenv, readFile, "DATABASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
 
 	if databaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
@@ -73,19 +84,49 @@ func load(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	adminPassword, err := secretValue(getenv, readFile, "ADMIN_PASSWORD")
+	if err != nil {
+		return Config{}, err
+	}
+	encryptionKey, err := secretValue(getenv, readFile, "SECRETS_ENCRYPTION_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		DatabaseURL:     databaseURL,
-		HTTPAddress:     httpAddress,
-		ShutdownTimeout: shutdownTimeout,
-		MonitorWorkers:  monitorWorkers,
-		RetentionDays:   retentionDays,
-		AdminEmail:      getenv("ADMIN_EMAIL"),
-		AdminPassword:   getenv("ADMIN_PASSWORD"),
-		SessionSecure:   sessionSecure,
-		SessionIdle:     sessionIdle,
-		SessionAbsolute: sessionAbsolute,
-		TrustProxy:      trustProxy,
+		DatabaseURL:          databaseURL,
+		HTTPAddress:          httpAddress,
+		ShutdownTimeout:      shutdownTimeout,
+		MonitorWorkers:       monitorWorkers,
+		RetentionDays:        retentionDays,
+		AdminEmail:           getenv("ADMIN_EMAIL"),
+		AdminPassword:        adminPassword,
+		SessionSecure:        sessionSecure,
+		SessionIdle:          sessionIdle,
+		SessionAbsolute:      sessionAbsolute,
+		TrustProxy:           trustProxy,
+		SecretsEncryptionKey: encryptionKey,
 	}, nil
+}
+
+func secretValue(
+	getenv func(string) string,
+	readFile func(string) ([]byte, error),
+	name string,
+) (string, error) {
+	value := getenv(name)
+	filePath := getenv(name + "_FILE")
+	if value != "" && filePath != "" {
+		return "", fmt.Errorf("%s and %s_FILE cannot both be set", name, name)
+	}
+	if filePath == "" {
+		return value, nil
+	}
+	contents, err := readFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", name, err)
+	}
+	return strings.TrimSuffix(strings.TrimSuffix(string(contents), "\n"), "\r"), nil
 }
 
 func boolean(getenv func(string) string, name string, defaultValue bool) (bool, error) {

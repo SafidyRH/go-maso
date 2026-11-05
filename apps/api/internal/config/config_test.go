@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,55 @@ func TestLoadUsesDefaults(t *testing.T) {
 	}
 	if cfg.SessionSecure || cfg.TrustProxy {
 		t.Fatal("secure cookie and proxy trust must default to false for local development")
+	}
+}
+
+func TestLoadReadsSensitiveValuesFromFiles(t *testing.T) {
+	t.Parallel()
+
+	values := map[string]string{
+		"DATABASE_URL_FILE":           "/run/secrets/database_url",
+		"ADMIN_PASSWORD_FILE":         "/run/secrets/admin_password",
+		"SECRETS_ENCRYPTION_KEY_FILE": "/run/secrets/encryption_key",
+	}
+	files := map[string]string{
+		"/run/secrets/database_url":   "postgres://secret\n",
+		"/run/secrets/admin_password": "admin secret\n",
+		"/run/secrets/encryption_key": "base64 key\n",
+	}
+	cfg, err := loadWith(
+		func(name string) string { return values[name] },
+		func(path string) ([]byte, error) {
+			value, ok := files[path]
+			if !ok {
+				return nil, errors.New("missing test secret")
+			}
+			return []byte(value), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("loadWith() error = %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://secret" || cfg.AdminPassword != "admin secret" || cfg.SecretsEncryptionKey != "base64 key" {
+		t.Fatalf("file-backed secrets were not loaded: %+v", cfg)
+	}
+}
+
+func TestLoadRejectsSecretValueAndFileTogether(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadWith(func(name string) string {
+		switch name {
+		case "DATABASE_URL":
+			return "postgres://value"
+		case "DATABASE_URL_FILE":
+			return "/run/secrets/database_url"
+		default:
+			return ""
+		}
+	}, func(string) ([]byte, error) { return nil, nil })
+	if err == nil || !strings.Contains(err.Error(), "cannot both be set") {
+		t.Fatalf("loadWith() error = %v, want conflicting secret sources", err)
 	}
 }
 
