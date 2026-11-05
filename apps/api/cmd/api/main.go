@@ -19,6 +19,7 @@ import (
 	"github.com/safidy/go-maso/apps/api/internal/incident"
 	"github.com/safidy/go-maso/apps/api/internal/monitor"
 	"github.com/safidy/go-maso/apps/api/internal/monitoring"
+	"github.com/safidy/go-maso/apps/api/internal/securestore"
 	"github.com/safidy/go-maso/apps/api/internal/webui"
 )
 
@@ -61,7 +62,16 @@ func main() {
 	monitorRepository := monitor.NewRepository(db)
 
 	monitoringRepository := monitoring.NewRepository(db)
-	incidentRepository := incident.NewRepository(db)
+	secretVault, err := securestore.NewVault(cfg.SecretsEncryptionKey)
+	if err != nil {
+		slog.Error("failed to initialize secret vault", "error", err)
+		os.Exit(1)
+	}
+	incidentRepository := incident.NewRepository(db, secretVault)
+	if err := incidentRepository.MigrateLegacySecrets(ctx); err != nil {
+		slog.Error("failed to encrypt legacy webhook destinations", "error", err)
+		os.Exit(1)
+	}
 	incidentEngine := incident.NewEngine(incidentRepository)
 
 	dashboardRepository := dashboard.NewRepository(db)

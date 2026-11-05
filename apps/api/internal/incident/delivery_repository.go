@@ -39,6 +39,7 @@ func (r *Repository) RecoverInterruptedDeliveries(ctx context.Context) error {
 
 func (r *Repository) ClaimPendingDelivery(ctx context.Context) (PendingDelivery, error) {
 	var value PendingDelivery
+	var encryptedURL []byte
 	err := r.db.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id
@@ -55,12 +56,13 @@ func (r *Repository) ClaimPendingDelivery(ctx context.Context) (PendingDelivery,
 		FROM candidate
 		WHERE d.id = candidate.id
 		RETURNING d.id::text, d.incident_id::text, d.event_type, d.webhook_url,
-		          d.payload, d.attempts, d.max_attempts, d.idempotency_key
+		          d.webhook_url_encrypted, d.payload, d.attempts, d.max_attempts, d.idempotency_key
 	`).Scan(
 		&value.ID,
 		&value.IncidentID,
 		&value.EventType,
 		&value.WebhookURL,
+		&encryptedURL,
 		&value.Payload,
 		&value.Attempts,
 		&value.MaxAttempts,
@@ -71,6 +73,12 @@ func (r *Repository) ClaimPendingDelivery(ctx context.Context) (PendingDelivery,
 	}
 	if err != nil {
 		return PendingDelivery{}, fmt.Errorf("claim notification delivery: %w", err)
+	}
+	if len(encryptedURL) > 0 {
+		value.WebhookURL, err = r.vault.DecryptString(encryptedURL, "delivery-webhook")
+		if err != nil {
+			return PendingDelivery{}, fmt.Errorf("decrypt delivery webhook: %w", err)
+		}
 	}
 	return value, nil
 }

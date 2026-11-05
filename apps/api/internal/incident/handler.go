@@ -72,7 +72,13 @@ func (h *Handler) putAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	normalizeAlertRule(&input)
-	if err := validateAlertRule(input); err != nil {
+	existingRule, existingErr := h.repository.GetAlertRule(r.Context(), monitorID)
+	if existingErr != nil && !errors.Is(existingErr, ErrAlertRuleNotFound) {
+		h.internalError(w, "get existing alert rule", existingErr)
+		return
+	}
+	webhookConfigured := existingErr == nil && existingRule.WebhookConfigured
+	if err := validateAlertRule(input, webhookConfigured); err != nil {
 		httpapi.WriteError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -292,8 +298,8 @@ func normalizeAlertRule(input *AlertRuleInput) {
 	}
 }
 
-func validateAlertRule(input AlertRuleInput) error {
-	if input.Enabled && input.WebhookURL == "" {
+func validateAlertRule(input AlertRuleInput, webhookConfigured bool) error {
+	if input.Enabled && input.WebhookURL == "" && !webhookConfigured {
 		return errors.New("webhook_url is required when alerting is enabled")
 	}
 	if input.FailureThreshold < 1 || input.FailureThreshold > 20 {

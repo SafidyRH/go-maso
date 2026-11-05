@@ -490,7 +490,7 @@ function renderSettings() {
         <div class="settings-body">
           <form data-form="alert-rule" data-monitor-id="${escapeHTML(monitor.id)}">
             <div class="form-section-title"><div><h3>Règle d’alerte</h3><p>Un webhook unique est envoyé à l’ouverture puis, si activé, au rétablissement.</p></div><label class="switch"><input name="enabled" type="checkbox" ${rule.enabled ? "checked" : ""}/><span></span><strong>Active</strong></label></div>
-            <label class="field field-wide"><span>URL du webhook</span><input name="webhook_url" type="url" value="${escapeHTML(rule.webhook_url)}" placeholder="https://hooks.example.com/go-maso" /></label>
+            <label class="field field-wide"><span>URL du webhook</span><input name="webhook_url" type="url" value="" placeholder="${rule.webhook_configured ? "Webhook chiffré configuré · laisser vide pour le conserver" : "https://hooks.example.com/go-maso"}" /><small>${rule.webhook_configured ? "La destination existante n’est jamais renvoyée au navigateur." : "La destination sera chiffrée avant stockage."}</small></label>
             <div class="form-grid">
               <label class="field"><span>Échecs consécutifs</span><input name="failure_threshold" type="number" min="1" max="20" value="${rule.failure_threshold}" required /></label>
               <label class="field"><span>Fenêtre d’observation (s)</span><input name="failure_window_seconds" type="number" min="30" max="86400" value="${rule.failure_window_seconds}" required /></label>

@@ -10,7 +10,7 @@ func TestNormalizeAndValidateAlertRule(t *testing.T) {
 
 	input := AlertRuleInput{Enabled: true, WebhookURL: "  https://hooks.example.com/alert  "}
 	normalizeAlertRule(&input)
-	if err := validateAlertRule(input); err != nil {
+	if err := validateAlertRule(input, false); err != nil {
 		t.Fatalf("validateAlertRule() error = %v", err)
 	}
 	if input.WebhookURL != "https://hooks.example.com/alert" || input.FailureThreshold != 3 || input.CooldownSeconds != 0 {
@@ -23,8 +23,11 @@ func TestValidateAlertRuleRejectsEnabledRuleWithoutWebhook(t *testing.T) {
 
 	input := AlertRuleInput{Enabled: true}
 	normalizeAlertRule(&input)
-	if err := validateAlertRule(input); err == nil {
+	if err := validateAlertRule(input, false); err == nil {
 		t.Fatal("validateAlertRule() succeeded without webhook URL")
+	}
+	if err := validateAlertRule(input, true); err != nil {
+		t.Fatalf("validateAlertRule() rejected an existing encrypted webhook: %v", err)
 	}
 }
 

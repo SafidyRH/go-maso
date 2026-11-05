@@ -80,8 +80,8 @@ func TestUpAgainstPostgres(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&versions); err != nil {
 		t.Fatalf("count migrations: %v", err)
 	}
-	if versions != 5 {
-		t.Fatalf("applied migration count = %d, want 5", versions)
+	if versions != 6 {
+		t.Fatalf("applied migration count = %d, want 6", versions)
 	}
 }
 

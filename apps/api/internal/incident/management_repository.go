@@ -34,6 +34,14 @@ func DefaultAlertRule(monitorID string) AlertRule {
 }
 
 func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, input AlertRuleInput) (AlertRule, error) {
+	var encryptedURL []byte
+	var err error
+	if input.WebhookURL != "" {
+		encryptedURL, err = r.vault.EncryptString(input.WebhookURL, "alert-rule-webhook")
+		if err != nil {
+			return AlertRule{}, fmt.Errorf("encrypt alert webhook: %w", err)
+		}
+	}
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return AlertRule{}, fmt.Errorf("begin alert rule update: %w", err)
@@ -41,15 +49,20 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
 	var rule AlertRule
+	var storedEncryptedURL []byte
 	err = tx.QueryRow(ctx, `
 		INSERT INTO alert_rules (
-			monitor_id, enabled, webhook_url, failure_threshold, failure_window_seconds,
+			monitor_id, enabled, webhook_url, webhook_url_encrypted, failure_threshold, failure_window_seconds,
 			latency_threshold_ms, latency_consecutive_checks, cooldown_seconds, notify_recovery
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, '', COALESCE($3::bytea, ''::bytea), $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (monitor_id) DO UPDATE SET
 			enabled = EXCLUDED.enabled,
-			webhook_url = EXCLUDED.webhook_url,
+			webhook_url = '',
+			webhook_url_encrypted = CASE
+				WHEN $3::bytea IS NULL THEN alert_rules.webhook_url_encrypted
+				ELSE $3
+			END,
 			failure_threshold = EXCLUDED.failure_threshold,
 			failure_window_seconds = EXCLUDED.failure_window_seconds,
 			latency_threshold_ms = EXCLUDED.latency_threshold_ms,
@@ -57,13 +70,13 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 			cooldown_seconds = EXCLUDED.cooldown_seconds,
 			notify_recovery = EXCLUDED.notify_recovery,
 			updated_at = NOW()
-		RETURNING id::text, monitor_id::text, enabled, webhook_url, failure_threshold,
+		RETURNING id::text, monitor_id::text, enabled, webhook_url_encrypted, failure_threshold,
 		          failure_window_seconds, latency_threshold_ms, latency_consecutive_checks,
 		          cooldown_seconds, notify_recovery, created_at, updated_at
 	`,
 		monitorID,
 		input.Enabled,
-		input.WebhookURL,
+		encryptedURL,
 		input.FailureThreshold,
 		input.FailureWindowSeconds,
 		input.LatencyThresholdMS,
@@ -74,7 +87,7 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 		&rule.ID,
 		&rule.MonitorID,
 		&rule.Enabled,
-		&rule.WebhookURL,
+		&storedEncryptedURL,
 		&rule.FailureThreshold,
 		&rule.FailureWindowSeconds,
 		&rule.LatencyThresholdMS,
@@ -87,6 +100,13 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 	if err != nil {
 		return AlertRule{}, fmt.Errorf("upsert alert rule: %w", err)
 	}
+	if len(storedEncryptedURL) > 0 {
+		rule.WebhookURL, err = r.vault.DecryptString(storedEncryptedURL, "alert-rule-webhook")
+		if err != nil {
+			return AlertRule{}, fmt.Errorf("decrypt saved alert webhook: %w", err)
+		}
+	}
+	rule.WebhookConfigured = rule.WebhookURL != ""
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE monitors SET failure_threshold = $2, updated_at = NOW()

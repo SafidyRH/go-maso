@@ -12,17 +12,25 @@ import (
 )
 
 type Repository struct {
-	db *pgxpool.Pool
+	db    *pgxpool.Pool
+	vault secretVault
 }
 
-func NewRepository(db *pgxpool.Pool) *Repository {
-	return &Repository{db: db}
+type secretVault interface {
+	EncryptString(string, string) ([]byte, error)
+	DecryptString([]byte, string) (string, error)
+}
+
+func NewRepository(db *pgxpool.Pool, vault secretVault) *Repository {
+	return &Repository{db: db, vault: vault}
 }
 
 func (r *Repository) GetAlertRule(ctx context.Context, monitorID string) (AlertRule, error) {
 	var rule AlertRule
+	var encryptedURL []byte
+	var legacyURL string
 	err := r.db.QueryRow(ctx, `
-		SELECT id::text, monitor_id::text, enabled, webhook_url, failure_threshold,
+		SELECT id::text, monitor_id::text, enabled, webhook_url, webhook_url_encrypted, failure_threshold,
 		       failure_window_seconds, latency_threshold_ms, latency_consecutive_checks,
 		       cooldown_seconds, notify_recovery, created_at, updated_at
 		FROM alert_rules
@@ -31,7 +39,8 @@ func (r *Repository) GetAlertRule(ctx context.Context, monitorID string) (AlertR
 		&rule.ID,
 		&rule.MonitorID,
 		&rule.Enabled,
-		&rule.WebhookURL,
+		&legacyURL,
+		&encryptedURL,
 		&rule.FailureThreshold,
 		&rule.FailureWindowSeconds,
 		&rule.LatencyThresholdMS,
@@ -47,7 +56,76 @@ func (r *Repository) GetAlertRule(ctx context.Context, monitorID string) (AlertR
 	if err != nil {
 		return AlertRule{}, fmt.Errorf("get alert rule: %w", err)
 	}
+	if len(encryptedURL) > 0 {
+		rule.WebhookURL, err = r.vault.DecryptString(encryptedURL, "alert-rule-webhook")
+		if err != nil {
+			return AlertRule{}, fmt.Errorf("decrypt alert webhook: %w", err)
+		}
+	} else {
+		rule.WebhookURL = legacyURL
+	}
+	rule.WebhookConfigured = rule.WebhookURL != ""
 	return rule, nil
+}
+
+func (r *Repository) MigrateLegacySecrets(ctx context.Context) error {
+	rows, err := r.db.Query(ctx, "SELECT id::text, webhook_url FROM alert_rules WHERE webhook_url <> ''")
+	if err != nil {
+		return fmt.Errorf("list legacy alert secrets: %w", err)
+	}
+	type legacySecret struct{ id, value string }
+	legacyRules := make([]legacySecret, 0)
+	for rows.Next() {
+		var item legacySecret
+		if err := rows.Scan(&item.id, &item.value); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan legacy alert secret: %w", err)
+		}
+		legacyRules = append(legacyRules, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate legacy alert secrets: %w", err)
+	}
+	rows.Close()
+	for _, item := range legacyRules {
+		encrypted, err := r.vault.EncryptString(item.value, "alert-rule-webhook")
+		if err != nil {
+			return fmt.Errorf("encrypt legacy alert secret: %w", err)
+		}
+		if _, err := r.db.Exec(ctx, `UPDATE alert_rules SET webhook_url_encrypted = $2, webhook_url = '', updated_at = NOW() WHERE id = $1`, item.id, encrypted); err != nil {
+			return fmt.Errorf("save encrypted alert secret: %w", err)
+		}
+	}
+
+	rows, err = r.db.Query(ctx, "SELECT id::text, webhook_url FROM notification_deliveries WHERE webhook_url <> ''")
+	if err != nil {
+		return fmt.Errorf("list legacy delivery secrets: %w", err)
+	}
+	legacyDeliveries := make([]legacySecret, 0)
+	for rows.Next() {
+		var item legacySecret
+		if err := rows.Scan(&item.id, &item.value); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan legacy delivery secret: %w", err)
+		}
+		legacyDeliveries = append(legacyDeliveries, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate legacy delivery secrets: %w", err)
+	}
+	rows.Close()
+	for _, item := range legacyDeliveries {
+		encrypted, err := r.vault.EncryptString(item.value, "delivery-webhook")
+		if err != nil {
+			return fmt.Errorf("encrypt legacy delivery secret: %w", err)
+		}
+		if _, err := r.db.Exec(ctx, `UPDATE notification_deliveries SET webhook_url_encrypted = $2, webhook_url = '', updated_at = NOW() WHERE id = $1`, item.id, encrypted); err != nil {
+			return fmt.Errorf("save encrypted delivery secret: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *Repository) IsInMaintenance(ctx context.Context, monitorID string, observedAt time.Time) (bool, error) {
@@ -257,6 +335,10 @@ func (r *Repository) queueDelivery(
 	if rule.WebhookURL == "" {
 		return nil
 	}
+	encryptedURL, err := r.vault.EncryptString(rule.WebhookURL, "delivery-webhook")
+	if err != nil {
+		return fmt.Errorf("encrypt delivery webhook: %w", err)
+	}
 
 	payload, err := json.Marshal(map[string]any{
 		"version": "1",
@@ -294,11 +376,11 @@ func (r *Repository) queueDelivery(
 
 	command, err := tx.Exec(ctx, `
 		INSERT INTO notification_deliveries (
-			incident_id, event_type, webhook_url, payload, next_attempt_at, idempotency_key
+			incident_id, event_type, webhook_url, webhook_url_encrypted, payload, next_attempt_at, idempotency_key
 		)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		VALUES ($1, $2, '', $3, $4, $5, $6)
 		ON CONFLICT (idempotency_key) DO NOTHING
-	`, value.ID, eventType, rule.WebhookURL, payload, nextAttempt, value.ID+":"+eventType)
+	`, value.ID, eventType, encryptedURL, payload, nextAttempt, value.ID+":"+eventType)
 	if err != nil {
 		return fmt.Errorf("queue notification delivery: %w", err)
 	}

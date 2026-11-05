@@ -2,6 +2,7 @@ package incident
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/safidy/go-maso/apps/api/internal/monitor"
 	"github.com/safidy/go-maso/apps/api/internal/monitoring"
+	"github.com/safidy/go-maso/apps/api/internal/securestore"
 )
 
 func TestIncidentLifecycleAndUniqueWebhookAgainstPostgres(t *testing.T) {
@@ -62,7 +64,11 @@ func TestIncidentLifecycleAndUniqueWebhookAgainstPostgres(t *testing.T) {
 		t.Fatalf("insert monitor: %v", err)
 	}
 
-	repository := NewRepository(pool)
+	vault, err := securestore.NewVault(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatalf("create test secret vault: %v", err)
+	}
+	repository := NewRepository(pool, vault)
 	_, err = repository.UpsertAlertRule(ctx, monitorID, AlertRuleInput{
 		Enabled:                  true,
 		WebhookURL:               webhook.URL,

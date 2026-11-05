@@ -21,7 +21,8 @@ type AlertRule struct {
 	ID                       string    `json:"id"`
 	MonitorID                string    `json:"monitor_id"`
 	Enabled                  bool      `json:"enabled"`
-	WebhookURL               string    `json:"webhook_url"`
+	WebhookURL               string    `json:"-"`
+	WebhookConfigured        bool      `json:"webhook_configured"`
 	FailureThreshold         int       `json:"failure_threshold"`
 	FailureWindowSeconds     int       `json:"failure_window_seconds"`
 	LatencyThresholdMS       int64     `json:"latency_threshold_ms"`
