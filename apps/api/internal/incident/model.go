@@ -23,6 +23,9 @@ type AlertRule struct {
 	Enabled                  bool      `json:"enabled"`
 	WebhookURL               string    `json:"-"`
 	WebhookConfigured        bool      `json:"webhook_configured"`
+	SigningSecret            string    `json:"-"`
+	SigningSecretConfigured  bool      `json:"signing_secret_configured"`
+	RevealedSigningSecret    string    `json:"signing_secret,omitempty"`
 	FailureThreshold         int       `json:"failure_threshold"`
 	FailureWindowSeconds     int       `json:"failure_window_seconds"`
 	LatencyThresholdMS       int64     `json:"latency_threshold_ms"`
@@ -42,6 +45,11 @@ type AlertRuleInput struct {
 	LatencyConsecutiveChecks int    `json:"latency_consecutive_checks"`
 	CooldownSeconds          int    `json:"cooldown_seconds"`
 	NotifyRecovery           bool   `json:"notify_recovery"`
+}
+
+type SigningSecretRotation struct {
+	SigningSecret string    `json:"signing_secret"`
+	RotatedAt     time.Time `json:"rotated_at"`
 }
 
 type Incident struct {

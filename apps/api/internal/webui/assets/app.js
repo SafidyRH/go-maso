@@ -449,14 +449,14 @@ function findMonitor(monitorID) {
 async function openMonitorSettings(monitorID) {
   const monitor = findMonitor(monitorID);
   if (!monitor) return;
-  state.settings = { monitor, loading: true, rule: null, maintenances: [] };
+  state.settings = { monitor, loading: true, rule: null, maintenances: [], revealedSecret: null };
   renderSettings();
   try {
     const [rule, maintenances] = await Promise.all([
       api(`/monitors/${encodeURIComponent(monitorID)}/alert-rule`),
       api(`/monitors/${encodeURIComponent(monitorID)}/maintenance-windows`),
     ]);
-    state.settings = { monitor, loading: false, rule, maintenances };
+    state.settings = { monitor, loading: false, rule, maintenances, revealedSecret: null };
     renderSettings();
   } catch (error) {
     state.settings = null;
@@ -470,13 +470,38 @@ function closeSettings() {
   renderSettings();
 }
 
+async function rotateSigningSecret() {
+  if (!state.settings?.monitor?.id) return;
+  if (!window.confirm("Renouveler la clé HMAC ? Le destinataire devra être mis à jour avant la prochaine livraison.")) return;
+  try {
+    const rotation = await api(`/monitors/${encodeURIComponent(state.settings.monitor.id)}/alert-rule/signing-secret/rotate`, { method: "POST" });
+    state.settings.rule.signing_secret_configured = true;
+    state.settings.revealedSecret = rotation.signing_secret;
+    renderSettings();
+    showToast("Clé HMAC renouvelée. Copiez-la maintenant.");
+  } catch (error) {
+    showToast(`Rotation impossible : ${error.message}`);
+  }
+}
+
+async function copySigningSecret() {
+  const secret = state.settings?.revealedSecret;
+  if (!secret) return;
+  try {
+    await navigator.clipboard.writeText(secret);
+    showToast("Clé HMAC copiée.");
+  } catch {
+    showToast("Copie automatique impossible. Sélectionnez la clé manuellement.");
+  }
+}
+
 function renderSettings() {
   const root = document.querySelector("#modal-root");
   if (!state.settings) {
     root.innerHTML = "";
     return;
   }
-  const { monitor, loading, rule, maintenances } = state.settings;
+  const { monitor, loading, rule, maintenances, revealedSecret } = state.settings;
   if (loading) {
     root.innerHTML = '<div class="modal-backdrop"><section class="settings-modal"><div class="state-view" style="min-height:240px"><div class="state-content"><p>Chargement de la configuration…</p></div></div></section></div>';
     return;
@@ -491,6 +516,7 @@ function renderSettings() {
           <form data-form="alert-rule" data-monitor-id="${escapeHTML(monitor.id)}">
             <div class="form-section-title"><div><h3>Règle d’alerte</h3><p>Un webhook unique est envoyé à l’ouverture puis, si activé, au rétablissement.</p></div><label class="switch"><input name="enabled" type="checkbox" ${rule.enabled ? "checked" : ""}/><span></span><strong>Active</strong></label></div>
             <label class="field field-wide"><span>URL du webhook</span><input name="webhook_url" type="url" value="" placeholder="${rule.webhook_configured ? "Webhook chiffré configuré · laisser vide pour le conserver" : "https://hooks.example.com/go-maso"}" /><small>${rule.webhook_configured ? "La destination existante n’est jamais renvoyée au navigateur." : "La destination sera chiffrée avant stockage."}</small></label>
+            <div class="field field-wide"><span>Signature HMAC</span><small>${rule.signing_secret_configured ? "Clé active et chiffrée au repos. Chaque livraison contient X-Go-Maso-Timestamp et X-Go-Maso-Signature." : "La clé sera créée lors du premier enregistrement."}</small>${revealedSecret ? `<div class="secret-reveal"><code>${escapeHTML(revealedSecret)}</code><button class="config-link" type="button" data-copy-signing-secret>Copier</button></div><small>Copiez cette clé maintenant : elle ne sera plus affichée.</small>` : ""}</div>
             <div class="form-grid">
               <label class="field"><span>Échecs consécutifs</span><input name="failure_threshold" type="number" min="1" max="20" value="${rule.failure_threshold}" required /></label>
               <label class="field"><span>Fenêtre d’observation (s)</span><input name="failure_window_seconds" type="number" min="30" max="86400" value="${rule.failure_window_seconds}" required /></label>
@@ -499,7 +525,7 @@ function renderSettings() {
               <label class="field"><span>Cooldown (s)</span><input name="cooldown_seconds" type="number" min="0" max="86400" value="${rule.cooldown_seconds}" required /></label>
               <label class="check-field"><input name="notify_recovery" type="checkbox" ${rule.notify_recovery ? "checked" : ""}/><span>Notifier le rétablissement</span></label>
             </div>
-            <div class="form-actions"><button class="button" type="submit">Enregistrer la règle</button></div>
+            <div class="form-actions"><button class="button" type="submit">Enregistrer la règle</button>${rule.id ? '<button class="secondary-button" type="button" data-rotate-signing-secret>Renouveler la clé HMAC</button>' : ""}</div>
           </form>
           <div class="settings-divider"></div>
           <form data-form="maintenance" data-monitor-id="${escapeHTML(monitor.id)}">
@@ -607,6 +633,9 @@ document.addEventListener("click", (event) => {
   const maintenanceID = event.target.closest("[data-cancel-maintenance]")?.dataset.cancelMaintenance;
   if (maintenanceID) cancelMaintenance(maintenanceID);
 
+  if (event.target.closest("[data-rotate-signing-secret]")) rotateSigningSecret();
+  if (event.target.closest("[data-copy-signing-secret]")) copySigningSecret();
+
   const status = event.target.closest("[data-status]")?.dataset.status;
   if (status) {
     state.status = status;
@@ -652,6 +681,7 @@ document.addEventListener("submit", async (event) => {
       };
       const rule = await api(`/monitors/${encodeURIComponent(monitorID)}/alert-rule`, { method: "PUT", body: JSON.stringify(payload) });
       state.settings.rule = rule;
+      state.settings.revealedSecret = rule.signing_secret || null;
       showToast("Règle d’alerte enregistrée.");
     } else {
       await api(`/monitors/${encodeURIComponent(monitorID)}/maintenance-windows`, {

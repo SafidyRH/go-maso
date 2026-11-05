@@ -269,7 +269,9 @@ h3 { font-size: 14px; }
 .switch span::after { position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; content: ""; background: var(--ink-300); transition: .2s; }
 .switch input:checked + span { background: rgba(185,242,108,.25); }
 .switch input:checked + span::after { background: var(--lime); transform: translateX(16px); }
-.form-actions { display: flex; justify-content: flex-end; margin-top: 17px; }
+.form-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 17px; }
+.secret-reveal { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid rgba(185,242,108,.28); border-radius: 7px; background: rgba(185,242,108,.06); }
+.secret-reveal code { overflow: hidden; color: var(--lime); font-family: var(--mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .secondary-button { min-height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 7px; color: var(--paper); background: rgba(255,255,255,.04); cursor: pointer; font-weight: 700; }
 .settings-divider { height: 1px; margin: 25px 0; background: var(--border); }
 .maintenance-list { display: grid; gap: 7px; margin-top: 17px; }

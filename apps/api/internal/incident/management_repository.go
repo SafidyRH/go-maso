@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -42,6 +43,14 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 			return AlertRule{}, fmt.Errorf("encrypt alert webhook: %w", err)
 		}
 	}
+	generatedSigningSecret, err := generateSigningSecret()
+	if err != nil {
+		return AlertRule{}, err
+	}
+	encryptedSigningSecret, err := r.vault.EncryptString(generatedSigningSecret, "alert-rule-signing")
+	if err != nil {
+		return AlertRule{}, fmt.Errorf("encrypt webhook signing secret: %w", err)
+	}
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return AlertRule{}, fmt.Errorf("begin alert rule update: %w", err)
@@ -50,18 +59,25 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 
 	var rule AlertRule
 	var storedEncryptedURL []byte
+	var storedEncryptedSigningSecret []byte
+	var created bool
 	err = tx.QueryRow(ctx, `
 		INSERT INTO alert_rules (
-			monitor_id, enabled, webhook_url, webhook_url_encrypted, failure_threshold, failure_window_seconds,
+			monitor_id, enabled, webhook_url, webhook_url_encrypted, signing_secret_encrypted,
+			failure_threshold, failure_window_seconds,
 			latency_threshold_ms, latency_consecutive_checks, cooldown_seconds, notify_recovery
 		)
-		VALUES ($1, $2, '', COALESCE($3::bytea, ''::bytea), $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, '', COALESCE($3::bytea, ''::bytea), $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (monitor_id) DO UPDATE SET
 			enabled = EXCLUDED.enabled,
 			webhook_url = '',
 			webhook_url_encrypted = CASE
 				WHEN $3::bytea IS NULL THEN alert_rules.webhook_url_encrypted
 				ELSE $3
+			END,
+			signing_secret_encrypted = CASE
+				WHEN OCTET_LENGTH(alert_rules.signing_secret_encrypted) = 0 THEN EXCLUDED.signing_secret_encrypted
+				ELSE alert_rules.signing_secret_encrypted
 			END,
 			failure_threshold = EXCLUDED.failure_threshold,
 			failure_window_seconds = EXCLUDED.failure_window_seconds,
@@ -70,13 +86,14 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 			cooldown_seconds = EXCLUDED.cooldown_seconds,
 			notify_recovery = EXCLUDED.notify_recovery,
 			updated_at = NOW()
-		RETURNING id::text, monitor_id::text, enabled, webhook_url_encrypted, failure_threshold,
+		RETURNING id::text, monitor_id::text, enabled, webhook_url_encrypted, signing_secret_encrypted, failure_threshold,
 		          failure_window_seconds, latency_threshold_ms, latency_consecutive_checks,
-		          cooldown_seconds, notify_recovery, created_at, updated_at
+		          cooldown_seconds, notify_recovery, created_at, updated_at, (xmax = 0)
 	`,
 		monitorID,
 		input.Enabled,
 		encryptedURL,
+		encryptedSigningSecret,
 		input.FailureThreshold,
 		input.FailureWindowSeconds,
 		input.LatencyThresholdMS,
@@ -88,6 +105,7 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 		&rule.MonitorID,
 		&rule.Enabled,
 		&storedEncryptedURL,
+		&storedEncryptedSigningSecret,
 		&rule.FailureThreshold,
 		&rule.FailureWindowSeconds,
 		&rule.LatencyThresholdMS,
@@ -96,6 +114,7 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 		&rule.NotifyRecovery,
 		&rule.CreatedAt,
 		&rule.UpdatedAt,
+		&created,
 	)
 	if err != nil {
 		return AlertRule{}, fmt.Errorf("upsert alert rule: %w", err)
@@ -107,6 +126,16 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 		}
 	}
 	rule.WebhookConfigured = rule.WebhookURL != ""
+	if len(storedEncryptedSigningSecret) > 0 {
+		rule.SigningSecret, err = r.vault.DecryptString(storedEncryptedSigningSecret, "alert-rule-signing")
+		if err != nil {
+			return AlertRule{}, fmt.Errorf("decrypt saved webhook signing secret: %w", err)
+		}
+	}
+	rule.SigningSecretConfigured = rule.SigningSecret != ""
+	if created {
+		rule.RevealedSigningSecret = rule.SigningSecret
+	}
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE monitors SET failure_threshold = $2, updated_at = NOW()
@@ -119,6 +148,31 @@ func (r *Repository) UpsertAlertRule(ctx context.Context, monitorID string, inpu
 		return AlertRule{}, fmt.Errorf("commit alert rule update: %w", err)
 	}
 	return rule, nil
+}
+
+func (r *Repository) RotateSigningSecret(ctx context.Context, monitorID string) (SigningSecretRotation, error) {
+	secret, err := generateSigningSecret()
+	if err != nil {
+		return SigningSecretRotation{}, err
+	}
+	encrypted, err := r.vault.EncryptString(secret, "alert-rule-signing")
+	if err != nil {
+		return SigningSecretRotation{}, fmt.Errorf("encrypt webhook signing secret: %w", err)
+	}
+	var rotatedAt time.Time
+	err = r.db.QueryRow(ctx, `
+		UPDATE alert_rules
+		SET signing_secret_encrypted = $2, updated_at = NOW()
+		WHERE monitor_id = $1
+		RETURNING updated_at
+	`, monitorID, encrypted).Scan(&rotatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SigningSecretRotation{}, ErrAlertRuleNotFound
+	}
+	if err != nil {
+		return SigningSecretRotation{}, fmt.Errorf("rotate webhook signing secret: %w", err)
+	}
+	return SigningSecretRotation{SigningSecret: secret, RotatedAt: rotatedAt}, nil
 }
 
 func (r *Repository) ListIncidents(ctx context.Context, filter IncidentFilter) ([]Incident, error) {

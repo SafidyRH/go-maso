@@ -28,9 +28,11 @@ func NewRepository(db *pgxpool.Pool, vault secretVault) *Repository {
 func (r *Repository) GetAlertRule(ctx context.Context, monitorID string) (AlertRule, error) {
 	var rule AlertRule
 	var encryptedURL []byte
+	var encryptedSigningSecret []byte
 	var legacyURL string
 	err := r.db.QueryRow(ctx, `
-		SELECT id::text, monitor_id::text, enabled, webhook_url, webhook_url_encrypted, failure_threshold,
+		SELECT id::text, monitor_id::text, enabled, webhook_url, webhook_url_encrypted,
+		       signing_secret_encrypted, failure_threshold,
 		       failure_window_seconds, latency_threshold_ms, latency_consecutive_checks,
 		       cooldown_seconds, notify_recovery, created_at, updated_at
 		FROM alert_rules
@@ -41,6 +43,7 @@ func (r *Repository) GetAlertRule(ctx context.Context, monitorID string) (AlertR
 		&rule.Enabled,
 		&legacyURL,
 		&encryptedURL,
+		&encryptedSigningSecret,
 		&rule.FailureThreshold,
 		&rule.FailureWindowSeconds,
 		&rule.LatencyThresholdMS,
@@ -65,6 +68,13 @@ func (r *Repository) GetAlertRule(ctx context.Context, monitorID string) (AlertR
 		rule.WebhookURL = legacyURL
 	}
 	rule.WebhookConfigured = rule.WebhookURL != ""
+	if len(encryptedSigningSecret) > 0 {
+		rule.SigningSecret, err = r.vault.DecryptString(encryptedSigningSecret, "alert-rule-signing")
+		if err != nil {
+			return AlertRule{}, fmt.Errorf("decrypt webhook signing secret: %w", err)
+		}
+	}
+	rule.SigningSecretConfigured = rule.SigningSecret != ""
 	return rule, nil
 }
 
@@ -123,6 +133,89 @@ func (r *Repository) MigrateLegacySecrets(ctx context.Context) error {
 		}
 		if _, err := r.db.Exec(ctx, `UPDATE notification_deliveries SET webhook_url_encrypted = $2, webhook_url = '', updated_at = NOW() WHERE id = $1`, item.id, encrypted); err != nil {
 			return fmt.Errorf("save encrypted delivery secret: %w", err)
+		}
+	}
+
+	rows, err = r.db.Query(ctx, "SELECT id::text FROM alert_rules WHERE OCTET_LENGTH(signing_secret_encrypted) = 0")
+	if err != nil {
+		return fmt.Errorf("list unsigned alert rules: %w", err)
+	}
+	unsignedRuleIDs := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan unsigned alert rule: %w", err)
+		}
+		unsignedRuleIDs = append(unsignedRuleIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate unsigned alert rules: %w", err)
+	}
+	rows.Close()
+	for _, id := range unsignedRuleIDs {
+		secret, err := generateSigningSecret()
+		if err != nil {
+			return err
+		}
+		encrypted, err := r.vault.EncryptString(secret, "alert-rule-signing")
+		if err != nil {
+			return fmt.Errorf("encrypt webhook signing secret: %w", err)
+		}
+		if _, err := r.db.Exec(ctx, `
+			UPDATE alert_rules
+			SET signing_secret_encrypted = $2, updated_at = NOW()
+			WHERE id = $1 AND OCTET_LENGTH(signing_secret_encrypted) = 0
+		`, id, encrypted); err != nil {
+			return fmt.Errorf("save webhook signing secret: %w", err)
+		}
+	}
+
+	rows, err = r.db.Query(ctx, `
+		SELECT d.id::text, ar.signing_secret_encrypted
+		FROM notification_deliveries d
+		JOIN incidents i ON i.id = d.incident_id
+		JOIN alert_rules ar ON ar.monitor_id = i.monitor_id
+		WHERE OCTET_LENGTH(d.signing_secret_encrypted) = 0
+		  AND OCTET_LENGTH(ar.signing_secret_encrypted) > 0
+	`)
+	if err != nil {
+		return fmt.Errorf("list unsigned deliveries: %w", err)
+	}
+	type unsignedDelivery struct {
+		id              string
+		encryptedSecret []byte
+	}
+	unsignedDeliveries := make([]unsignedDelivery, 0)
+	for rows.Next() {
+		var item unsignedDelivery
+		if err := rows.Scan(&item.id, &item.encryptedSecret); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan unsigned delivery: %w", err)
+		}
+		unsignedDeliveries = append(unsignedDeliveries, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate unsigned deliveries: %w", err)
+	}
+	rows.Close()
+	for _, item := range unsignedDeliveries {
+		secret, err := r.vault.DecryptString(item.encryptedSecret, "alert-rule-signing")
+		if err != nil {
+			return fmt.Errorf("decrypt alert signing secret for delivery: %w", err)
+		}
+		encrypted, err := r.vault.EncryptString(secret, "delivery-signing")
+		if err != nil {
+			return fmt.Errorf("encrypt delivery signing secret: %w", err)
+		}
+		if _, err := r.db.Exec(ctx, `
+			UPDATE notification_deliveries
+			SET signing_secret_encrypted = $2, updated_at = NOW()
+			WHERE id = $1 AND OCTET_LENGTH(signing_secret_encrypted) = 0
+		`, item.id, encrypted); err != nil {
+			return fmt.Errorf("save delivery signing secret: %w", err)
 		}
 	}
 	return nil
@@ -335,9 +428,16 @@ func (r *Repository) queueDelivery(
 	if rule.WebhookURL == "" {
 		return nil
 	}
+	if rule.SigningSecret == "" {
+		return errors.New("webhook signing secret is not configured")
+	}
 	encryptedURL, err := r.vault.EncryptString(rule.WebhookURL, "delivery-webhook")
 	if err != nil {
 		return fmt.Errorf("encrypt delivery webhook: %w", err)
+	}
+	encryptedSigningSecret, err := r.vault.EncryptString(rule.SigningSecret, "delivery-signing")
+	if err != nil {
+		return fmt.Errorf("encrypt delivery signing secret: %w", err)
 	}
 
 	payload, err := json.Marshal(map[string]any{
@@ -376,11 +476,12 @@ func (r *Repository) queueDelivery(
 
 	command, err := tx.Exec(ctx, `
 		INSERT INTO notification_deliveries (
-			incident_id, event_type, webhook_url, webhook_url_encrypted, payload, next_attempt_at, idempotency_key
+			incident_id, event_type, webhook_url, webhook_url_encrypted,
+			signing_secret_encrypted, payload, next_attempt_at, idempotency_key
 		)
-		VALUES ($1, $2, '', $3, $4, $5, $6)
+		VALUES ($1, $2, '', $3, $4, $5, $6, $7)
 		ON CONFLICT (idempotency_key) DO NOTHING
-	`, value.ID, eventType, encryptedURL, payload, nextAttempt, value.ID+":"+eventType)
+	`, value.ID, eventType, encryptedURL, encryptedSigningSecret, payload, nextAttempt, value.ID+":"+eventType)
 	if err != nil {
 		return fmt.Errorf("queue notification delivery: %w", err)
 	}

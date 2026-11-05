@@ -34,6 +34,7 @@ func NewHandler(repository *Repository, monitorRepository *monitor.Repository, t
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /monitors/{id}/alert-rule", h.getAlertRule)
 	mux.HandleFunc("PUT /monitors/{id}/alert-rule", h.putAlertRule)
+	mux.HandleFunc("POST /monitors/{id}/alert-rule/signing-secret/rotate", h.rotateSigningSecret)
 	mux.HandleFunc("GET /incidents", h.listIncidents)
 	mux.HandleFunc("GET /incidents/{id}", h.getIncident)
 	mux.HandleFunc("POST /incidents/{id}/acknowledge", h.acknowledgeIncident)
@@ -95,6 +96,23 @@ func (h *Handler) putAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpapi.WriteJSON(w, http.StatusOK, rule)
+}
+
+func (h *Handler) rotateSigningSecret(w http.ResponseWriter, r *http.Request) {
+	monitorID, ok := h.requireMonitor(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	rotation, err := h.repository.RotateSigningSecret(r.Context(), monitorID)
+	if errors.Is(err, ErrAlertRuleNotFound) {
+		httpapi.WriteError(w, http.StatusNotFound, "alert rule must be saved before rotating its signing secret")
+		return
+	}
+	if err != nil {
+		h.internalError(w, "rotate webhook signing secret", err)
+		return
+	}
+	httpapi.WriteJSON(w, http.StatusOK, rotation)
 }
 
 func (h *Handler) listIncidents(w http.ResponseWriter, r *http.Request) {
